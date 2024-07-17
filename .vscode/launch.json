@@ -1,0 +1,296 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // Step 1 : Pretrain ERM on source
+            "name": "T3A: Pretrain_Single",
+            "type": "python",
+            "request": "launch",
+            "module": "domainbed.scripts.train",
+            "args": [
+                "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
+                "--output_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/single_run/vsDebug",
+                "--algorithm", "ERM",       // ERM, Rotn_JT_DG
+                "--dataset", "PACS",
+                "--test_env", "0",
+                "--steps", "200",
+                // "--wandb_name", "vsDebug",
+                "--hparams", "{\"backbone\": \"resnet18-BN\", \"batch_size\": 32}",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+
+        {
+            //  Step 2: Unsup adaptation on target
+            "name": "T3A: Adapt_Single",
+            "type": "python",
+            "request": "launch",
+            "module": "domainbed.scripts.unsupervised_adaptation",
+            "args": [
+                "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/single_run/vsDebug",
+                // "--wandb_name", "vsDebug",
+
+                // "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/stta/single_run/terra0_res18",
+                // "--wandb_name", "terra0_res18",
+                // "--checkpoint_freq", "50",
+
+                // "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/stta/single_run/terra0_res18",
+                // "--wandb_name", "terra1_res18",
+                // "--checkpoint_freq", "50",
+
+                // "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/stta/single_run/pacs1_res18",
+                // "--wandb_name", "pacs1_res18",
+                // "--checkpoint_freq", "25",
+
+                "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
+                "--adapt_algorithm", "PseudoLabel",         // T3A, Rotn_TTA, TentClf, PLClf, TentFull, PseudoLabel, SHOT
+                "--granularity", "Block",             // None, Block, Subblock, Layer
+                // DomainGen, DomainGen_Stats, DomainGen_Synth,
+                // None, Best, Bestmulti,
+                // Layer1, Layer1_Layer2_Layer3_Layer4
+                // Autorgn, Rgn, Rgnsing, (Rgnbin), Autosnr, Snrbin, Snrbinsing, (Snr),
+                // Png, Pngmultisharp, Pngmultismooth, Png_v:2, Pngmultisharp_v:2, Pngmultismooth_v:2,
+                // Oursactgap75,MetaLearn_1  (1 is layer_count), PostUpdate_PrevX_TotalLoss, 
+                // UpdateMask, GradMask, Info
+                // Totaldelta_l:2_bynparam:1
+                // Layer4_es:1_metric:valid_sz:n
+                "--find_algo", "DomainGen",
+                "--fix_algo", "Difflr",          // None, Trainsubset, Difflr
+                // "--track_tta", "True",          // True, False
+                // "--checkpoint_freq", "50",      // 25, 50, 100
+                // "--best_hp", "Man",             // True, False, Iid, Orc, Man, cmdline
+                "--best_hp", "cmdline",             // True, False, Iid, Orc, Man, cmdline
+                "--adapt_hparams_dict", "{\"alpha\": [0.1], \"gamma\": [1]}",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+
+        {
+            "name": "cotta: Cifar10c",
+            "type": "python",
+            "request": "launch",
+            "program": "cifar10c.py",
+            "args": [
+                // "--cfg", "cfgs/cifar10/source.yaml",
+                // "--cfg", "cfgs/cifar10/norm.yaml",
+                // "--cfg", "cfgs/cifar10/tent.yaml",
+
+                // "--cfg", "cfgs/cifar10/cotta_all.yaml",
+                // "--cfg", "cfgs/cifar10/cotta_least.yaml",
+
+                // "--cfg", "cfgs/cifar10/pl_all.yaml",
+                "--cfg", "cfgs/cifar10/pl_least.yaml",
+
+                // "--cfg", "cfgs/cifar10/shot_all.yaml",
+                // "--cfg", "cfgs/cifar10/shot_least.yaml",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "cwd": "${workspaceFolder}/benchmarks/cotta/cifar",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+
+        {
+            "name": "cotta: Cifar100c",
+            "type": "python",
+            "request": "launch",
+            "program": "cifar100c.py",            
+            "args": [
+                // "--cfg", "cfgs/cifar100/source.yaml",
+                // "--cfg", "cfgs/cifar100/norm.yaml",
+                // "--cfg", "cfgs/cifar100/tent.yaml",
+
+                // "--cfg", "cfgs/cifar100/cotta_all.yaml",
+                // "--cfg", "cfgs/cifar100/cotta_least.yaml",
+
+                // "--cfg", "cfgs/cifar100/pl_all.yaml",
+                "--cfg", "cfgs/cifar100/pl_least.yaml",
+
+                // "--cfg", "cfgs/cifar100/shot_all.yaml",
+                // "--cfg", "cfgs/cifar100/shot_least.yaml",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            },
+            "cwd": "${workspaceFolder}/benchmarks/cotta/cifar",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+
+        // ############################################################################################################
+        {
+            "name": "T3A: Pretrain_Sweep",
+            "type": "python",
+            "request": "launch",
+            "module": "domainbed.scripts.sweep",
+            "args": [
+                "launch",
+                "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
+                "--output_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/sweep/vsDebug",
+                "--command_launcher", "multi_gpu",  // local, multi_gpu, dummy
+                "--algorithms", "ERM",      // ERM, ERM_TTT
+                "--datasets", "PACS",
+                "--n_hparams", "1",
+                "--n_trials_from", "10",
+                "--n_trials", "1",
+                "--single_test_envs",
+                "--hparams", "{\"backbone\": \"resnet18-BN\", \"batch_size\": 32}",
+                "--skip_confirmation",
+                "--steps", "2",
+                // "--wandb_name", "vsDebug",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1"
+            },
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+
+        {
+            "name": "T3A: Adapt_Sweep",
+            "type": "python",
+            "request": "launch",
+            "module": "domainbed.scripts.sweep",
+            "args": [
+                "unsupervised_adaptation",
+                "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
+                "--output_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/sweep/vsDebug",
+                "--command_launcher", "multi_gpu",  // local, multi_gpu, dummy
+                "--algorithms", "ERM",      // ERM, Rotn_JT_DG
+                "--adapt_algorithms", "PseudoLabel",
+                "--granularities", "Block",
+                "--find_algos", "PostUpdate_PrevX_TotalLoss",
+                "--fix_algos", "Difflr",
+                "--datasets", "PACS",
+                "--n_hparams", "1",
+                "--n_trials_from", "10",
+                "--n_trials", "1",
+                "--single_test_envs",
+                "--hparams", "{\"backbone\": \"resnet18-BN\", \"batch_size\": 32}",
+                // "--skip_confirmation",
+                // "--wandb_name", "vsDebug",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1"
+            },
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+
+        {
+            "name": "T3A: Pandas",
+            "type": "python",
+            "request": "launch",
+            
+            //  Step 2: Unsup adaptation on target
+            "module": "domainbed.scripts.pandas_results",
+            "args": [
+                "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/sweep/",
+                // "--sweep_names", "vsDebug",
+                "--sweep_names", "PACS_resnet18-BN_ERM_0", "VLCS_resnet18-BN_ERM_0", "TerraIncognita_resnet18-BN_ERM_0", //"OfficeHome_resnet18-BN_ERM_0",
+                // "PACS_resnet50-BN_ERM_0", "VLCS_resnet50-BN_ERM_0", "TerraIncognita_resnet50-BN_ERM_0", "OfficeHome_resnet50-BN_ERM_0",
+                            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+
+        // ############################################################################################################
+        {
+            "name": "T3A: Sync_Sweep",
+            "type": "python",
+            "request": "launch",
+            
+            "module": "domainbed.scripts.sync_runs",
+            "args": [
+                "--input_dirs", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/sweep/vsDebug/",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+        {
+            "name": "T3A: Collect",
+            "type": "python",
+            "request": "launch",
+            
+            //  Step 2: Unsup adaptation on target
+            "module": "domainbed.scripts.collect_results",
+            "args": [
+                "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/sweep/vsDebug/",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+        {
+            "name": "T3A: Sup_Adapt_Single",
+            "type": "python",
+            "request": "launch",
+            
+            //  Step 2: Unsup adaptation on target
+            "module": "domainbed.scripts.supervised_adaptation",
+            "args": [
+                "--input_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/single_run/vsDebug",
+                "--ft_mode", "clf",         // clf|transformer|token|all
+                // "--wandb_name", "vsDebug",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            },
+
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        },
+        {
+            "name": "T3A: Sup_Adapt_Sweep",
+            "type": "python",
+            "request": "launch",
+            
+            "module": "domainbed.scripts.sweep",
+            "args": [
+                "supervised_adaptation",
+                "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
+                "--output_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/stta/sweep/vsDebug",
+                "--command_launcher", "multi_gpu",  // local, multi_gpu, dummy
+                "--algorithms", "ERM",      // ERM, Rotn_JT_DG
+                "--datasets", "PACS",
+                "--n_hparams", "1",
+                "--n_trials_from", "10",
+                "--n_trials", "1",
+                "--single_test_envs",
+                "--hparams", "{\"backbone\": \"resnet18-BN\"}",
+                "--skip_confirmation",
+                "--ft_modes", "clf",        // clf, transformer, token, all; token only for ViT based
+                "--wandb_name", "vsDebug"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1"
+            },
+
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}/benchmarks/T3A"
+        }
+    ]
+}
