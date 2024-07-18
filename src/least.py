@@ -33,6 +33,8 @@ def get_all_param_name_list(algorithm, granularity):
             granularity_level = -1
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']
+        elif granularity == 'model':
+            return [layer_name]
         else:
             raise NotImplementedError('Not implemented for granularity : {}'.format(granularity))
 
@@ -53,6 +55,8 @@ def get_all_param_name_list(algorithm, granularity):
             granularity_level = 4
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']
+        elif granularity == 'model':
+            return [layer_name]
         else:
             raise NotImplementedError('Not implemented for granularity : {}'.format(granularity))
     
@@ -72,6 +76,8 @@ def get_all_param_name_list(algorithm, granularity):
             granularity_level = 3
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']
+        elif granularity == 'model':
+            return [layer_name]
         else:
             raise NotImplementedError('Not implemented for granularity : {}'.format(granularity))
         
@@ -280,8 +286,9 @@ def compute_mask(metric_values_dict, td_variant):
                 mask_dict[box_name] = 0
     elif bin_mask == '0':
         # Layer-wise mask based on metric values: do nothing
-        for box_name, mask_value in mask_dict.items():
-            mask_dict[box_name] = mask_value
+        # for box_name, mask_value in mask_dict.items():
+        #     mask_dict[box_name] = mask_value
+        pass
     else:
         raise ValueError('TD Error: Invalid binarize mask : {}'.format(bin_mask))
 
