@@ -64,7 +64,7 @@
                 "--find_algo", "Domaingen",             // Domaingen, None, Least
                 "--fix_algo", "Difflr",                 // None, Difflr
                 // "--track_tta", "True",               // True, False
-                // "--checkpoint_freq", "50",           // 25, 50, 100
+                // "--ckpt_freq", "50",                 // 25, 50, 100
                 "--best_hp", "cmdline",                 // True, False, Iid, Orc, Man, cmdline
                 "--adapt_hparams_dict", "{\"alpha\": [0.1], \"gamma\": [1]}",
             ],

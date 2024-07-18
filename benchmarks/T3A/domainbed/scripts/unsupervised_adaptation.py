@@ -18,6 +18,7 @@ from tqdm import tqdm
 import numpy as np
 import PIL
 import torch
+import torch.nn.functional as F
 import torchvision
 import torch.utils.data
 import sys
@@ -126,6 +127,118 @@ def accuracy_ent(network, loader, weights, device, adapt=False):
     return correct / total, ent / total
 
 
+def accuracy_ent_loss(network, loader, weights, device, adapt=False):
+    correct = 0
+    total = 0
+    weights_offset = 0
+    ent = 0
+    total_unsup_loss, total_sup_loss = 0, 0
+
+    network.eval()
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device)
+            y = y.to(device)
+            if adapt is None:
+                p = network(x)
+            else:
+                p = network(x, adapt)
+            if weights is None:
+                batch_weights = torch.ones(len(x))
+            else:
+                batch_weights = weights[weights_offset: weights_offset + len(x)]
+                weights_offset += len(x)
+            batch_weights = batch_weights.to(device)
+            if p.size(1) == 1:
+                correct += (p.gt(0).eq(y).float() * batch_weights.view(-1, 1)).sum().item()
+            else:
+                correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
+            total += batch_weights.sum().item()
+            ent += softmax_entropy(p).sum().item()
+
+            ### Additional loss computation steps
+            total_unsup_loss += network.loss(p)
+            total_sup_loss += F.cross_entropy(p, y)
+    network.train()
+
+    return correct / total, ent / total, total_unsup_loss / total, total_sup_loss / total
+
+
+def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, ckpt_freq, adapt=False):
+    correct = 0
+    total = 0
+    weights_offset = 0
+    ent = 0
+
+    oodtr_name, loader, weights = oodtr_evals
+    total_unsup_loss, total_sup_loss = 0, 0
+
+    network.eval()
+    with torch.no_grad():
+        for step, (x, y) in tqdm(enumerate(loader), total=len(loader), desc='accuracy_ent_track', disable=PRODN):
+            x = x.to(device)
+            y = y.to(device)
+            if adapt is None:
+                p = network(x)
+            else:
+                p = network(x, adapt)
+            if weights is None:
+                batch_weights = torch.ones(len(x))
+            else:
+                batch_weights = weights[weights_offset: weights_offset + len(x)]
+                weights_offset += len(x)
+            batch_weights = batch_weights.to(device)
+            if p.size(1) == 1:
+                per_batch_correct = (p.gt(0).eq(y).float() * batch_weights.view(-1, 1)).sum().item()
+                correct += per_batch_correct
+            else:
+                per_batch_correct = (p.argmax(1).eq(y).float() * batch_weights).sum().item()
+                correct += per_batch_correct
+            total += batch_weights.sum().item()
+            ent += softmax_entropy(p).sum().item()
+
+            ### Additional tracking steps
+            track_results = {}
+
+            # Track accuracy and entropy on the ood training data
+            track_results['batch_acc_'+oodtr_name] = per_batch_correct / batch_weights.sum().item()
+            track_results['oodtr_acc_'+oodtr_name] = correct / total
+            
+            # Track losses on the ood training data
+            batch_unsup_loss = network.loss(p)
+            total_unsup_loss += batch_unsup_loss
+            track_results['batch_unsup_loss_'+oodtr_name] = batch_unsup_loss.item()
+            track_results['oodtr_unsup_loss_'+oodtr_name] = total_unsup_loss / total
+
+            batch_sup_loss = F.cross_entropy(p, y)
+            total_sup_loss += batch_sup_loss
+            track_results['batch_sup_loss_'+oodtr_name] = batch_sup_loss.item()
+            track_results['oodtr_sup_loss_'+oodtr_name] = total_sup_loss / total
+
+            if (step % ckpt_freq == 0) or (step == len(loader) - 1):
+                # Track accuracy and losses on the ood test data
+                for oodte_name, oodte_loader, oodte_weights in oodte_evals:
+                    oodte_acc, oodte_ent, oodte_unsup_loss, oodte_sup_loss = accuracy_ent_loss(network, oodte_loader, oodte_weights, device, adapt=False)
+                    track_results["oodte_acc_"+oodte_name] = oodte_acc
+                    track_results["oodte_unsup_loss_"+oodte_name] = oodte_unsup_loss
+                    track_results["oodte_sup_loss_"+oodte_name] = oodte_sup_loss
+
+                # Track accuracy and losses on the iid test data
+                for iidte_name, iidte_loader, iidte_weights in iidte_evals:
+                    iidte_acc, iidte_ent, iidte_unsup_loss, iidte_sup_loss = accuracy_ent_loss(network, iidte_loader, iidte_weights, device, adapt=False)
+                    track_results["iidte_acc_"+iidte_name] = iidte_acc
+                    track_results["iidte_unsup_loss_"+iidte_name] = iidte_unsup_loss
+                    track_results["iidte_sup_loss_"+iidte_name] = iidte_sup_loss
+                    break  # Only track the first iidte_loader, TODO: remove this line
+
+            # Log the tracked results
+            wandb.log(track_results, step=step)
+
+    network.train()
+
+    return correct / total, ent / total
+
+
 def get_best_hp(evals_list, hparams_list, hp_idx):
         best_acc = -1
         best_hparams = {}
@@ -170,12 +283,6 @@ def get_best_hp(evals_list, hparams_list, hp_idx):
             score = []
             for name, loader, weights in evals_list:
                 print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-                # if hp_idx == 'Man':
-                #     # For measuring the effect of sample complexity on powerset results
-                #     acc, ent, acc_dict = accuracy_ent_interim(adapted_algorithm, loader, weights, device, 5, adapt=True)
-                #     low_data_dict = {name + '_step' + str(k) + '_acc' :v for k, v in acc_dict.items()}
-                #     hparams_results.update(low_data_dict)
-                # else:
                 acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
                 score.append(acc)
                 hparams_results[name+'_acc'] = acc
@@ -200,13 +307,13 @@ if __name__ == "__main__":
     parser.add_argument('--input_dir', type=str)
     parser.add_argument('--adapt_algorithm', type=str, default="T3A")
     parser.add_argument('--find_algo', type=str, default="None")
-    parser.add_argument('--fix_algo', type=str, default="None",
-                        choices=['None', 'Trainsubset', 'Difflr'])
-    parser.add_argument('--granularity', type=str, default="None",
-                        choices=['None', 'Block', 'Subblock', 'Layer'],)
+    parser.add_argument('--fix_algo', type=str, default="None")
+    parser.add_argument('--granularity', type=str, default="None")
     parser.add_argument('--data_dir', type=str, default="")
     parser.add_argument('--best_hp', type=str, default='True')
     parser.add_argument('--wandb_name', type=str, default=None)
+    parser.add_argument('--track_tta', type=str, default="False")
+    parser.add_argument('--ckpt_freq', type=int, default=10000)
     parser.add_argument('--adapt_hparams_dict', type=str, default="{}",
         help='JSON-serialized adaptation hparams dict')
     args_in = parser.parse_args()
@@ -235,6 +342,8 @@ if __name__ == "__main__":
     args.granularity = args_in.granularity
     args.output_dir = args.input_dir
     args.best_hp = args_in.best_hp
+    args.track_tta = args_in.track_tta
+    args.ckpt_freq = args_in.ckpt_freq
     args.adapt_hparams_dict = args_in.adapt_hparams_dict
 
     # Set all Macros as args
@@ -253,12 +362,13 @@ if __name__ == "__main__":
         loc_alg_name = args.find_algo + args.fix_algo + args.granularity
         loc_dict = {
             'find_algo': [args.find_algo],
-            'fix_algo': [args.fix_algo],
+            # 'fix_algo': [args.fix_algo],
             'granularity': [args.granularity],
         }
     if 'least' in args.find_algo.lower():
         # Get the td variant and store as args
-        td_variant = least.get_td_variant(args.find_algo)
+        mask_algo = args.find_algo + '_lvl:' + args.granularity
+        td_variant = least.get_td_variant(mask_algo)
         for k, v in td_variant.items():
             setattr(args, "LEAST_"+k, v)
         
@@ -597,7 +707,7 @@ if __name__ == "__main__":
         for key, val in checkpoint_vals.items():
             results[key] = np.mean(val)
 
-        # ## Usual evaluation
+        # ## Usual evaluation, TODO: remove this and account it in pandas_results.py
         for name, loader, weights in evals:
             if not PRODN:
                 break           # use for faster target evaluation sometimes
@@ -607,9 +717,24 @@ if __name__ == "__main__":
             results[name+'_ent'] = ent
             adapted_algorithm.reset()
 
-        name, loader, weights = train_loader
-        print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-        acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+        # ## TTA evaluation
+        if args.track_tta.lower() != 'true':
+            name, loader, weights = train_loader
+            print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
+            acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+        else:
+            oodtr_evals = train_loader
+            oodte_evals, iidte_evals = [], []
+            for name, loader, weights in evals:
+                if name in ['env{}_out'.format(i) for i in args.test_envs]:
+                    oodte_evals.append((name, loader, weights))
+                elif 'out' in name:
+                    iidte_evals.append((name, loader, weights))
+            name = oodtr_evals[0]
+            print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
+            acc, ent = accuracy_ent_track(adapted_algorithm,
+                                          oodtr_evals, oodte_evals, iidte_evals,
+                                          device, args.ckpt_freq, adapt=True)
         results[name+'_acc'] = acc
         results[name+'_ent'] = ent
 

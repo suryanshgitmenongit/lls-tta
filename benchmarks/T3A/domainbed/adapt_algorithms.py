@@ -153,13 +153,16 @@ class TentFull(Algorithm):
         optimizer.zero_grad()
         outputs = model(x)
         # adapt
-        loss = softmax_entropy(outputs).mean(0)
+        loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
         self.iter_idx += 1
         optimizer.step()
         return outputs
+    
+    def loss(self, outputs):
+        return softmax_entropy(outputs).mean(0)
 
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
@@ -337,16 +340,19 @@ class PseudoLabel(Algorithm):
         optimizer.zero_grad()
         outputs = model(x)
         # adapt
-        py, y_prime = F.softmax(outputs, dim=-1).max(1)
-        flag = py > self.beta
-        
-        loss = F.cross_entropy(outputs[flag], y_prime[flag])
+        loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
         self.iter_idx += 1
         optimizer.step()
         return outputs
+    
+    def loss(self, outputs):
+        py, y_prime = F.softmax(outputs, dim=-1).max(1)
+        flag = py > self.beta
+        loss = F.cross_entropy(outputs[flag], y_prime[flag])
+        return loss
 
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
