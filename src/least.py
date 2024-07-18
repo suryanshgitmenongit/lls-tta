@@ -3,8 +3,6 @@ import torchvision
 
 import copy
 
-### LEAST functions
-# GRANULARITY = 'Layer'
 
 def remove_duplicates(seq):
     seen = set()
@@ -12,6 +10,7 @@ def remove_duplicates(seq):
     return [x for x in seq if not (x in seen or seen_add(x))]
 
 def get_all_param_name_list(algorithm, granularity):
+    granularity = granularity.lower()
     model = algorithm
     if hasattr(algorithm, 'featurizer'):
         model = algorithm.featurizer.network
@@ -22,15 +21,15 @@ def get_all_param_name_list(algorithm, granularity):
         pre_box_list = []
         post_box_list = []
         layer_name = 'layer'
-        if granularity == 'Block':
+        if granularity == 'block':
             granularity_level = 1
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Subblock':
+        elif granularity == 'subblock':
             granularity_level = 2
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Layer':
+        elif granularity == 'layer':
             granularity_level = -1
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']
@@ -42,15 +41,15 @@ def get_all_param_name_list(algorithm, granularity):
         pre_box_list = []
         post_box_list = []
         layer_name = 'layer'
-        if granularity == 'Block':
+        if granularity == 'block':
             granularity_level = 1
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Subblock':
+        elif granularity == 'subblock':
             granularity_level = 3
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Layer':
+        elif granularity == 'layer':
             granularity_level = 4
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']
@@ -61,15 +60,15 @@ def get_all_param_name_list(algorithm, granularity):
         pre_box_list = []
         post_box_list = []
         layer_name = 'stage'
-        if granularity == 'Block':
+        if granularity == 'block':
             granularity_level = 1
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Subblock':
+        elif granularity == 'subblock':
             granularity_level = 2
             # pre_box_list = ['layer0']
             # post_box_list = ['classifier']
-        elif granularity == 'Layer':
+        elif granularity == 'layer':
             granularity_level = 3
             # pre_box_list = ['layer0.conv1', 'layer0.bn1']
             # post_box_list = ['classifier']

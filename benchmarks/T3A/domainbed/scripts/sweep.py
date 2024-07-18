@@ -27,14 +27,45 @@ from domainbed import command_launchers
 import tqdm
 import shlex
 
+def get_args_hash(train_args):
+    tmp_train_args = {
+        key:value for key, value in train_args.items() \
+                    if key in [
+                        'dataset', 'algorithm', 'test_envs',
+                        'holdout_fraction', 'hparams_seed',
+                        'task', 'trial_seed', 'seed'
+                    ]
+    }
+    hparams_dict = eval(train_args['hparams'])
+    hparams_args = {
+        key:value for key, value in hparams_dict.items() \
+                    if key in [
+                        'backbone'
+                    ]
+    }
+    tmp_train_args.update(hparams_args)
+    args_str = json.dumps(tmp_train_args, sort_keys=True)
+    args_hash = hashlib.md5(args_str.encode('utf-8')).hexdigest()
+    return args_hash, args_str
+
+def get_loc_alg_name(adapt_algorithm, find_algo, fix_algo, granularity):
+    if adapt_algorithm in['T3A', 'TentPreBN', 'TentClf', 'PLClf']:
+        loc_alg_name = "Nolocadapt"
+    else:
+        # Loc adapt, only for adapt_algorithms modifying the featurizer
+        if find_algo == 'None' or fix_algo == 'None' or granularity == 'None':
+            loc_alg_name = "Nolocadapt"
+        else:
+            loc_alg_name = find_algo + fix_algo + granularity
+    return loc_alg_name
+
 class Job:
     NOT_LAUNCHED = 'Not launched'
     INCOMPLETE = 'Incomplete'
     DONE = 'Done'
 
     def __init__(self, train_args, sweep_output_dir):
-        args_str = json.dumps(train_args, sort_keys=True)
-        args_hash = hashlib.md5(args_str.encode('utf-8')).hexdigest()
+        args_hash, args_str = get_args_hash(train_args)
         self.output_dir = os.path.join(sweep_output_dir, args_hash)
 
         self.train_args = copy.deepcopy(train_args)
@@ -92,17 +123,20 @@ class SAJob:
     DONE = 'Done'
 
     def __init__(self, train_args, sweep_output_dir, ft_mode):
-        args_str = json.dumps(train_args, sort_keys=True)
-        args_hash = hashlib.md5(args_str.encode('utf-8')).hexdigest()
+        args_hash, args_str = get_args_hash(train_args)
         self.output_dir = os.path.join(sweep_output_dir, args_hash)
         self.ft_mode = ft_mode
         self.train_args = copy.deepcopy(train_args)
         self.train_args['output_dir'] = self.output_dir
+        #TODO: make this automatic!
         command = [
             'python', '-m', 'domainbed.scripts.supervised_adaptation',
             '--input_dir', self.train_args['output_dir'], 
+            '--data_dir', self.train_args['data_dir'],
             '--ft_mode', ft_mode
         ]
+        if 'wandb_name' in self.train_args:
+            command.append('--wandb_name {}'.format(self.train_args['wandb_name']))
         self.command_str = ' '.join(command)
 
         if os.path.exists(os.path.join(self.output_dir, 'done')):
@@ -153,26 +187,38 @@ class UAJob:
     PRETRAINED = 'Pretrained'
     DONE = 'Done'
 
-    def __init__(self, train_args, sweep_output_dir, adapt_algorithm):
-        args_str = json.dumps(train_args, sort_keys=True)
-        args_hash = hashlib.md5(args_str.encode('utf-8')).hexdigest()
+    def __init__(self, train_args, sweep_output_dir, adapt_algorithm,
+                 find_algo, fix_algo, granularity):
+        args_hash, args_str = get_args_hash(train_args)
         self.output_dir = os.path.join(sweep_output_dir, args_hash)
         self.adapt_algorithm = adapt_algorithm
+        self.find_algo = find_algo
+        self.fix_algo = fix_algo
+        self.granularity = granularity
+        loc_alg_name = get_loc_alg_name(adapt_algorithm, find_algo, fix_algo, granularity)
+        self.loc_alg_name = loc_alg_name
         self.train_args = copy.deepcopy(train_args)
         self.train_args['output_dir'] = self.output_dir
+        #TODO: make this automatic!
         command = [
             'python', '-m', 'domainbed.scripts.unsupervised_adaptation',
             '--input_dir', self.train_args['output_dir'], 
-            '--adapt_algorithm', adapt_algorithm
+            '--adapt_algorithm', adapt_algorithm,
+            '--find_algo', find_algo,
+            '--fix_algo', fix_algo,
+            '--granularity', granularity,
+            '--data_dir', self.train_args['data_dir']
         ]
+        if 'wandb_name' in self.train_args:
+            command.append('--wandb_name {}'.format(self.train_args['wandb_name']))
         self.command_str = ' '.join(command)
 
         if os.path.exists(os.path.join(self.output_dir, 'done')):
-            if os.path.exists(os.path.join(self.output_dir, 'done_{}'.format(adapt_algorithm))):
+            if os.path.exists(os.path.join(self.output_dir, 'done_{}_{}'.format(adapt_algorithm, loc_alg_name))):
                 self.state = UAJob.DONE
             else:
                 self.state = UAJob.PRETRAINED
-        elif os.path.exists(os.path.join(self.output_dir, 'results_{}.jsonl'.format(adapt_algorithm))):
+        elif os.path.exists(os.path.join(self.output_dir, 'results_{}_{}.jsonl'.format(adapt_algorithm, loc_alg_name))):
             self.state = UAJob.INCOMPLETE
         else:
             self.state = UAJob.NOT_LAUNCHED
@@ -181,7 +227,8 @@ class UAJob:
         job_info = (self.train_args['dataset'],
             self.train_args['algorithm'],
             self.train_args['test_envs'],
-            self.train_args['hparams_seed'], self.adapt_algorithm)
+            self.train_args['hparams_seed'], self.adapt_algorithm,
+            self.find_algo, self.fix_algo, self.granularity)
         return '{}: {} {}'.format(
             self.state,
             self.output_dir,
@@ -221,7 +268,7 @@ def all_test_env_combinations(n):
             yield [i, j]
 
 def make_args_list(n_trials_from, n_trials, dataset_names, algorithms, n_hparams_from, n_hparams, steps,
-    data_dir, task, holdout_fraction, single_test_envs, hparams):
+    data_dir, task, holdout_fraction, single_test_envs, hparams, wandb_name):
     args_list = []
     for trial_seed in range(n_trials_from, n_trials_from+n_trials):
         for dataset in dataset_names:
@@ -249,6 +296,9 @@ def make_args_list(n_trials_from, n_trials, dataset_names, algorithms, n_hparams
                             train_args['steps'] = steps
                         if hparams is not None:
                             train_args['hparams'] = hparams
+                        if wandb_name is not None:
+                            test_env_name =  "te" + "".join([str(env) for env in test_envs])
+                            train_args['wandb_name'] = test_env_name + "_" + wandb_name
                         args_list.append(train_args)
     return args_list
 
@@ -281,6 +331,14 @@ if __name__ == "__main__":
     parser.add_argument('--holdout_fraction', type=float, default=0.2)
     parser.add_argument('--single_test_envs', action='store_true')
     parser.add_argument('--skip_confirmation', action='store_true')
+    parser.add_argument('--wandb_name', type=str, default=None)
+    # for unsup_adapt
+    parser.add_argument('--adapt_algorithms', nargs='+', type=str, default=[""])
+    parser.add_argument('--find_algos', nargs='+', type=str, default=[""])
+    parser.add_argument('--fix_algos', nargs='+', type=str, default=[""])
+    parser.add_argument('--granularities', nargs='+', type=str, default=[""])
+    # for sup_adapt
+    parser.add_argument('--ft_modes', type=str, nargs='+', default=[""])
     args = parser.parse_args()
 
     args_list = make_args_list(
@@ -295,7 +353,8 @@ if __name__ == "__main__":
         task=args.task,
         holdout_fraction=args.holdout_fraction,
         single_test_envs=args.single_test_envs,
-        hparams=args.hparams
+        hparams=args.hparams,
+        wandb_name=args.wandb_name
     )
 
     if args.command in ['launch', 'delete_incomplete']:
@@ -326,10 +385,18 @@ if __name__ == "__main__":
             Job.delete(to_delete)
 
     elif args.command == 'supervised_adaptation':
-        jobs = [SAJob(train_args, args.output_dir, ft_mode='clf') for train_args in args_list]
-        jobs += [SAJob(train_args, args.output_dir, ft_mode='token') for train_args in args_list]
-        jobs += [SAJob(train_args, args.output_dir, ft_mode='transformer') for train_args in args_list]
-        jobs += [SAJob(train_args, args.output_dir, ft_mode='all') for train_args in args_list]
+        if not args.ft_modes[0]:
+            ft_modes = [
+                'clf', 'token', 'transformer', 'all'
+            ]
+        else:
+            ft_modes = args.ft_modes
+
+        jobs = []
+        for ft_mode in ft_modes:
+            jobs += [SAJob(
+                train_args, args.output_dir,
+                ft_mode=ft_mode) for train_args in args_list]
 
         for job in jobs:
             print(job)
@@ -349,23 +416,71 @@ if __name__ == "__main__":
         Job.launch(to_launch, launcher_fn)
 
     elif args.command in ['unsupervised_adaptation', 'unsup_adapt']:
-        methods = [
-            'T3A', 'TentFull', 'TentNorm', 'TentPreBN','TentClf', 
-            'PseudoLabel', 'PLClf', 'SHOT', 'SHOTIM'
+        if not args.adapt_algorithms[0]:
+            methods = [
+                'T3A', 'TentFull', 'TentNorm', 'TentPreBN','TentClf', 
+                'PseudoLabel', 'PLClf', 'SHOT', 'SHOTIM'
+                ]
+        else:
+            methods = args.adapt_algorithms
+
+        if not args.find_algos[0]:
+            find_methods = [
+                'None', 'LEAST',
             ]
+        else:
+            find_methods = args.find_algos
+        if not args.fix_algos[0]:
+            fix_methods = [
+                'None', 'Difflr',
+            ]
+        else:
+            fix_methods = args.fix_algos
+        if not args.granularities[0]:
+            granularity_methods = [
+                'None', 'Block', 'Subblock', 'Layer',
+            ]
+        else:
+            granularity_methods = args.granularities
+
         jobs = []
         for method in methods:
-            jobs += [UAJob(
-                train_args, args.output_dir,
-                adapt_algorithm=method) for train_args in args_list]
-            jobs += [UAJob(
-                train_args, args.output_dir,
-                adapt_algorithm='{}-{}'.format(method, '8'))
-                for train_args in args_list]
-            jobs += [UAJob(
-                train_args, args.output_dir,
-                adapt_algorithm='{}-{}'.format(method, '200'))
-                for train_args in args_list]
+            # for batch size: 32, 8, 200
+            #TODO: uncomment for batch size 8, 200
+            for find_method in find_methods:
+                for fix_method in fix_methods:
+                    for granularity_method in granularity_methods:
+                        # skip if only one of them is None
+                        # if (find_method == 'None' or fix_method == 'None' or granularity_method == 'None') and \
+                        #     (find_method != fix_method or find_method != granularity_method):
+                        #     continue
+                        
+                        # skip loc adapt for adapt_algorithms not modifying the featurizer
+                        if method in ['T3A', 'TentPreBN', 'TentClf', 'PLClf'] and find_method != 'None':
+                            continue
+                        print(method, find_method, fix_method, granularity_method)
+
+                        jobs += [UAJob(
+                            train_args, args.output_dir,
+                            adapt_algorithm=method,
+                            find_algo=find_method,
+                            fix_algo=fix_method,
+                            granularity=granularity_method)
+                            for train_args in args_list]
+                        # jobs += [UAJob(
+                        #     train_args, args.output_dir,
+                        #     adapt_algorithm='{}-{}'.format(method, '8'),
+                        #     find_algo=find_method,
+                        #     fix_algo=fix_method,
+                        #     granularity=granularity_method)
+                        #     for train_args in args_list]
+                        # jobs += [UAJob(
+                        #     train_args, args.output_dir,
+                        #     adapt_algorithm='{}-{}'.format(method, '200'),
+                        #     find_algo=find_method,
+                        #     fix_algo=fix_method,
+                        #     granularity=granularity_method)
+                        #     for train_args in args_list]
 
         for job in jobs:
             print(job)

@@ -13,8 +13,8 @@
             "args": [
                 "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
                 "--output_dir", "/home-local2/sasah14.extra.nobkp/scratch/out/estta/single_run/vsDebug",
-                "--algorithm", "ERM",       // ERM, Rotn_JT_DG
-                "--dataset", "PACS",
+                "--algorithm", "ERM",       // ERM, CORAL
+                "--dataset", "PACS",        // PACS, VLCS
                 "--test_env", "0",
                 "--steps", "200",
                 // "--wandb_name", "vsDebug",
@@ -50,8 +50,8 @@
                 // "--checkpoint_freq", "25",
 
                 "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
-                "--adapt_algorithm", "PseudoLabel",         // T3A, Rotn_TTA, TentClf, PLClf, TentFull, PseudoLabel, SHOT
-                "--granularity", "Block",             // None, Block, Subblock, Layer
+                "--adapt_algorithm", "PseudoLabel",     // PseudoLabel, SHOT
+                "--granularity", "Block",               // None, Block, Subblock, Layer
                 // DomainGen, DomainGen_Stats, DomainGen_Synth,
                 // None, Best, Bestmulti,
                 // Layer1, Layer1_Layer2_Layer3_Layer4
@@ -61,12 +61,11 @@
                 // UpdateMask, GradMask, Info
                 // Totaldelta_l:2_bynparam:1
                 // Layer4_es:1_metric:valid_sz:n
-                "--find_algo", "DomainGen",
-                "--fix_algo", "Difflr",          // None, Trainsubset, Difflr
-                // "--track_tta", "True",          // True, False
-                // "--checkpoint_freq", "50",      // 25, 50, 100
-                // "--best_hp", "Man",             // True, False, Iid, Orc, Man, cmdline
-                "--best_hp", "cmdline",             // True, False, Iid, Orc, Man, cmdline
+                "--find_algo", "Domaingen",             // Domaingen, None, Least
+                "--fix_algo", "Difflr",                 // None, Difflr
+                // "--track_tta", "True",               // True, False
+                // "--checkpoint_freq", "50",           // 25, 50, 100
+                "--best_hp", "cmdline",                 // True, False, Iid, Orc, Man, cmdline
                 "--adapt_hparams_dict", "{\"alpha\": [0.1], \"gamma\": [1]}",
             ],
             "env": {

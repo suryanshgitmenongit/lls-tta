@@ -87,7 +87,7 @@ class DINO(torch.nn.Module):
 
 class DeiT(torch.nn.Module):
     KNOWN_MODELS = {
-        'DeiT': timm.models.vision_transformer.vit_deit_base_distilled_patch16_224
+        'DeiT': timm.models.deit.deit_base_distilled_patch16_224
     }
     def __init__(self, input_shape, hparams):
         super().__init__()

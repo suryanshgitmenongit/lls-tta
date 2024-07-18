@@ -65,6 +65,10 @@ def print_row(row, colwidth=10, latex=False):
         return str(x).ljust(colwidth)[:colwidth]
     print(sep.join([format_val(x) for x in row]), end_)
 
+def print_dbg(msg, dbg=True):
+    if dbg:
+        print(msg)
+
 class _SplitDataset(torch.utils.data.Dataset):
     """Used by split_dataset"""
     def __init__(self, underlying_dataset, keys):

@@ -7,6 +7,9 @@ import torch.autograd as autograd
 
 import copy
 import numpy as np
+import sys
+sys.path.append('../../../src')
+import least
 
 from domainbed.algorithms import Algorithm
 
@@ -114,6 +117,8 @@ class TentFull(Algorithm):
         self.steps = hparams['gamma']
         assert self.steps > 0, "tent requires >= 1 step(s) to forward and update"
         self.episodic = False
+        self.mask_algo = hparams['find_algo'] + '_lvl:' + hparams['granularity']
+        self.iter_idx = 0
     
         # note: if the model is never reset, like for continual adaptation,
         # then skipping the state copy would save memory
@@ -150,6 +155,9 @@ class TentFull(Algorithm):
         # adapt
         loss = softmax_entropy(outputs).mean(0)
         loss.backward()
+        # Call LEAST to modify optimizer and trainable layers
+        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        self.iter_idx += 1
         optimizer.step()
         return outputs
 
@@ -170,6 +178,7 @@ class TentFull(Algorithm):
             raise Exception("cannot reset without saved model/optimizer state")
         load_model_and_optimizer(self.model, self.optimizer,
                                  self.model_state, self.optimizer_state)
+        self.iter_idx = 0
 
 
 class TentNorm(TentFull):
@@ -292,6 +301,8 @@ class PseudoLabel(Algorithm):
         self.steps = hparams['gamma']
         assert self.steps > 0, "tent requires >= 1 step(s) to forward and update"
         self.episodic = False
+        self.mask_algo = hparams['find_algo'] + '_lvl:' + hparams['granularity']
+        self.iter_idx = 0
     
         # note: if the model is never reset, like for continual adaptation,
         # then skipping the state copy would save memory
@@ -331,6 +342,9 @@ class PseudoLabel(Algorithm):
         
         loss = F.cross_entropy(outputs[flag], y_prime[flag])
         loss.backward()
+        # Call LEAST to modify optimizer and trainable layers
+        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        self.iter_idx += 1
         optimizer.step()
         return outputs
 
@@ -351,6 +365,7 @@ class PseudoLabel(Algorithm):
             raise Exception("cannot reset without saved model/optimizer state")
         load_model_and_optimizer(self.model, self.optimizer,
                                  self.model_state, self.optimizer_state)
+        self.iter_idx = 0
 
 
 class PLClf(PseudoLabel):
@@ -393,6 +408,8 @@ class SHOT(Algorithm):
         self.steps = hparams['gamma']
         assert self.steps > 0, "tent requires >= 1 step(s) to forward and update"
         self.episodic = False
+        self.mask_algo = hparams['find_algo'] + '_lvl:' + hparams['granularity']
+        self.iter_idx = 0
     
         # note: if the model is never reset, like for continual adaptation,
         # then skipping the state copy would save memory
@@ -429,6 +446,9 @@ class SHOT(Algorithm):
         
         loss = self.loss(outputs)
         loss.backward()
+        # Call LEAST to modify optimizer and trainable layers
+        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        self.iter_idx += 1
         optimizer.step()
         return outputs
     
@@ -465,6 +485,7 @@ class SHOT(Algorithm):
             raise Exception("cannot reset without saved model/optimizer state")
         load_model_and_optimizer(self.model, self.optimizer,
                                  self.model_state, self.optimizer_state)
+        self.iter_idx = 0
 
 
 class SHOTIM(SHOT):    

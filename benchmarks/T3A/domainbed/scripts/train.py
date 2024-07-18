@@ -9,6 +9,7 @@ import sys
 import time
 import uuid
 from itertools import chain
+import wandb
 
 import numpy as np
 import PIL
@@ -47,6 +48,7 @@ if __name__ == "__main__":
         help='Checkpoint every N steps. Default is dataset-dependent.')
     parser.add_argument('--test_envs', type=int, nargs='+', default=[0])
     parser.add_argument('--output_dir', type=str, default="train_output")
+    parser.add_argument('--wandb_name', type=str, default=None)
     parser.add_argument('--holdout_fraction', type=float, default=0.2)
     parser.add_argument('--uda_holdout_fraction', type=float, default=0)
     parser.add_argument('--skip_model_save', action='store_true')
@@ -61,6 +63,20 @@ if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
     sys.stdout = misc.Tee(os.path.join(args.output_dir, 'out.txt'))
     sys.stderr = misc.Tee(os.path.join(args.output_dir, 'err.txt'))
+
+    if args.wandb_name is None:
+        wandb_mode = "disabled" # no name given -> do not init wandb
+    else:
+        wandb_mode = "offline"
+    wandb_run = wandb.init(project="stta",
+                            entity="amazing-ml",
+                            name=args.wandb_name,
+                            config=args,
+                            mode=wandb_mode,
+                            dir=args.output_dir)
+    print("Wandb:")
+    print("\tMode: {}".format(wandb_run.mode))
+    print("\tPath: {}".format(wandb_run.dir))
 
     print("Environment:")
     print("\tPython: {}".format(sys.version.split(" ")[0]))
@@ -82,6 +98,7 @@ if __name__ == "__main__":
             misc.seed_hash(args.hparams_seed, args.trial_seed))
     if args.hparams:
         hparams.update(json.loads(args.hparams))
+    wandb.config.update(hparams)
 
     print('HParams:')
     for k, v in sorted(hparams.items()):
@@ -246,6 +263,7 @@ if __name__ == "__main__":
             misc.print_row([results[key] for key in results_keys],
                 colwidth=12)
 
+            wandb.log(results, step=step)
             results.update({
                 'hparams': hparams,
                 'args': vars(args)    
@@ -275,3 +293,5 @@ if __name__ == "__main__":
 
     with open(os.path.join(args.output_dir, 'done'), 'w') as f:
         f.write('done')
+
+    wandb_run.finish()
