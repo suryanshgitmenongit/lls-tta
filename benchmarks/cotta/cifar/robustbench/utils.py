@@ -8,6 +8,7 @@ import gdown
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Optional, Union
+from tqdm import trange
 
 import requests
 import torch
@@ -217,7 +218,9 @@ def clean_accuracy(model: nn.Module,
     acc = 0.
     n_batches = math.ceil(x.shape[0] / batch_size)
     with torch.no_grad():
-        for counter in range(n_batches):
+        for counter in trange(n_batches):
+            # if counter >= 10:
+            #     break
             x_curr = x[counter * batch_size:(counter + 1) *
                        batch_size].to(device)
             y_curr = y[counter * batch_size:(counter + 1) *

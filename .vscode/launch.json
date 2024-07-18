@@ -86,17 +86,17 @@
                 // "--cfg", "cfgs/cifar10/norm.yaml",
                 // "--cfg", "cfgs/cifar10/tent.yaml",
 
-                // "--cfg", "cfgs/cifar10/cotta_all.yaml",
+                // "--cfg", "cfgs/cifar10/cotta.yaml",
                 // "--cfg", "cfgs/cifar10/cotta_least.yaml",
 
-                // "--cfg", "cfgs/cifar10/pl_all.yaml",
-                "--cfg", "cfgs/cifar10/pl_least.yaml",
+                // "--cfg", "cfgs/cifar10/pseudolabel.yaml",
+                "--cfg", "cfgs/cifar10/pseudolabel_least.yaml",
 
-                // "--cfg", "cfgs/cifar10/shot_all.yaml",
+                // "--cfg", "cfgs/cifar10/shot.yaml",
                 // "--cfg", "cfgs/cifar10/shot_least.yaml",
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "0"
+                "CUDA_VISIBLE_DEVICES": "1"
             },
             "cwd": "${workspaceFolder}/benchmarks/cotta/cifar",
             "console": "integratedTerminal",
@@ -113,17 +113,17 @@
                 // "--cfg", "cfgs/cifar100/norm.yaml",
                 // "--cfg", "cfgs/cifar100/tent.yaml",
 
-                // "--cfg", "cfgs/cifar100/cotta_all.yaml",
+                // "--cfg", "cfgs/cifar100/cotta.yaml",
                 // "--cfg", "cfgs/cifar100/cotta_least.yaml",
 
-                // "--cfg", "cfgs/cifar100/pl_all.yaml",
-                "--cfg", "cfgs/cifar100/pl_least.yaml",
+                // "--cfg", "cfgs/cifar100/pseudolabel.yaml",
+                "--cfg", "cfgs/cifar100/pseudolabel_least.yaml",
 
-                // "--cfg", "cfgs/cifar100/shot_all.yaml",
+                // "--cfg", "cfgs/cifar100/shot.yaml",
                 // "--cfg", "cfgs/cifar100/shot_least.yaml",
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "0"
+                "CUDA_VISIBLE_DEVICES": "1"
             },
             "cwd": "${workspaceFolder}/benchmarks/cotta/cifar",
             "console": "integratedTerminal",

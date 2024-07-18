@@ -10,6 +10,10 @@ import my_transforms as my_transforms
 from time import time
 import logging
 
+import sys
+sys.path.append('../../../src')
+import least
+
 
 def get_tta_transforms(gaussian_std: float=0.005, soft=False, clip_inputs=False):
     img_shape = (32, 32, 3)
@@ -57,13 +61,15 @@ class CoTTA(nn.Module):
 
     Once tented, a model adapts itself by updating on every forward.
     """
-    def __init__(self, model, optimizer, steps=1, episodic=False, mt_alpha=0.99, rst_m=0.1, ap=0.9):
+    def __init__(self, model, optimizer, steps=1, episodic=False, mask_algo='None', mt_alpha=0.99, rst_m=0.1, ap=0.9):
         super().__init__()
         self.model = model
         self.optimizer = optimizer
         self.steps = steps
         assert steps > 0, "cotta requires >= 1 step(s) to forward and update"
         self.episodic = episodic
+        self.mask_algo = mask_algo
+        self.iter_idx = 0
         
         self.model_state, self.optimizer_state, self.model_ema, self.model_anchor = \
             copy_model_and_optimizer(self.model, self.optimizer)
@@ -89,6 +95,7 @@ class CoTTA(nn.Module):
         # Use this line to also restore the teacher model                         
         self.model_state, self.optimizer_state, self.model_ema, self.model_anchor = \
             copy_model_and_optimizer(self.model, self.optimizer)
+        self.iter_idx = 0
 
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
@@ -111,6 +118,9 @@ class CoTTA(nn.Module):
         # Student update
         loss = (softmax_entropy(outputs, outputs_ema)).mean(0) 
         loss.backward()
+        # Call LEAST to modify optimizer and trainable layers
+        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        self.iter_idx += 1
         optimizer.step()
         optimizer.zero_grad()
         # Teacher update

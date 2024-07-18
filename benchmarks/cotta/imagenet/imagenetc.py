@@ -11,6 +11,8 @@ from robustbench.utils import clean_accuracy as accuracy
 import tent
 import norm
 import cotta
+import pseudolabel
+import shot
 
 from conf import cfg, load_cfg_fom_args
 
@@ -35,8 +37,15 @@ def evaluate(description):
     if cfg.MODEL.ADAPTATION == "cotta":
         logger.info("test-time adaptation: CoTTA")
         model = setup_cotta(base_model)
+    if cfg.MODEL.ADAPTATION == "shot":
+        logger.info("test-time adaptation: SHOT")
+        model = setup_shot(base_model)
+    if cfg.MODEL.ADAPTATION == "pseudolabel":
+        logger.info("test-time adaptation: Pseudolabel")
+        model = setup_pseudolabel(base_model)
     # evaluate on each severity and type of corruption in turn
     prev_ct = "x0"
+    running_mean = 0
     for ii, severity in enumerate(cfg.CORRUPTION.SEVERITY):
         for i_x, corruption_type in enumerate(cfg.CORRUPTION.TYPE):
             # reset adaptation for each combination of corruption x severity
@@ -56,6 +65,8 @@ def evaluate(description):
             acc = accuracy(model, x_test, y_test, cfg.TEST.BATCH_SIZE)
             err = 1. - acc
             logger.info(f"error % [{corruption_type}{severity}]: {err:.2%}")
+            running_mean = (running_mean * i_x + err) / (i_x + 1)
+            logger.info(f"running mean error %: {running_mean:.2%}")
 
 
 def setup_source(model):
@@ -136,11 +147,52 @@ def setup_cotta(model):
     optimizer = setup_optimizer(params)
     cotta_model = cotta.CoTTA(model, optimizer,
                            steps=cfg.OPTIM.STEPS,
-                           episodic=cfg.MODEL.EPISODIC)
+                           episodic=cfg.MODEL.EPISODIC,
+                           mask_algo=cfg.OPTIM.MASK_ALGO)
     logger.info(f"model for adaptation: %s", model)
     logger.info(f"params for adaptation: %s", param_names)
     logger.info(f"optimizer for adaptation: %s", optimizer)
     return cotta_model
+
+
+def setup_pseudolabel(model):
+    """Set up tent adaptation.
+
+    Configure the model for training + feature modulation by batch statistics,
+    collect the parameters for feature modulation by gradient optimization,
+    set up the optimizer, and then tent the model.
+    """
+    model = pseudolabel.configure_model(model)
+    params, param_names = pseudolabel.collect_params(model)
+    optimizer = setup_optimizer(params)
+    pseudolabel_model = pseudolabel.PseudoLabel(model, optimizer,
+                                                gamma=cfg.OPTIM.STEPS,
+                                                episodic=cfg.MODEL.EPISODIC,
+                                                mask_algo=cfg.OPTIM.MASK_ALGO)
+    logger.info(f"model for adaptation: %s", model)
+    logger.info(f"params for adaptation: %s", param_names)
+    logger.info(f"optimizer for adaptation: %s", optimizer)
+    return pseudolabel_model
+
+
+def setup_shot(model):
+    """Set up tent adaptation.
+
+    Configure the model for training + feature modulation by batch statistics,
+    collect the parameters for feature modulation by gradient optimization,
+    set up the optimizer, and then tent the model.
+    """
+    model = shot.configure_model(model)
+    params, param_names = shot.collect_params(model)
+    optimizer = setup_optimizer(params)
+    shot_model = shot.SHOT(model, optimizer,
+                           gamma=cfg.OPTIM.STEPS,
+                           episodic=cfg.MODEL.EPISODIC,
+                           mask_algo=cfg.OPTIM.MASK_ALGO)
+    logger.info(f"model for adaptation: %s", model)
+    logger.info(f"params for adaptation: %s", param_names)
+    logger.info(f"optimizer for adaptation: %s", optimizer)
+    return shot_model
 
 
 if __name__ == '__main__':

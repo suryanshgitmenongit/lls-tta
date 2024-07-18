@@ -75,6 +75,9 @@ _C.OPTIM.LR = 1e-3
 # Choices: Adam, SGD
 _C.OPTIM.METHOD = 'Adam'
 
+# Mask algo
+_C.OPTIM.MASK_ALGO = 'None'
+
 # Beta
 _C.OPTIM.BETA = 0.9
 
