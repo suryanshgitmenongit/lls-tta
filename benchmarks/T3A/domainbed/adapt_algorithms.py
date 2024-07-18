@@ -156,7 +156,11 @@ class TentFull(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
-        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        if self.hparams['track_tta'].lower() == 'true':
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            self.info = info
+        else:
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -343,7 +347,11 @@ class PseudoLabel(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
-        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        if self.hparams['track_tta'].lower() == 'true':
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            self.info = info
+        else:
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -453,7 +461,11 @@ class SHOT(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
-        optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+        if self.hparams['track_tta'].lower() == 'true':
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            self.info = info
+        else:
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
         self.iter_idx += 1
         optimizer.step()
         return outputs

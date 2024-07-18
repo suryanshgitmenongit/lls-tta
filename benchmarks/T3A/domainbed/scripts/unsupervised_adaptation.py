@@ -215,6 +215,11 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
             track_results['batch_sup_loss_'+oodtr_name] = batch_sup_loss.item()
             track_results['oodtr_sup_loss_'+oodtr_name] = total_sup_loss / total
 
+            if 'least' in args.find_algo.lower():
+                # Track LEAST based intermediate results
+                for layer_name, metric_value in network.info['metric_values_dict'].items():
+                    track_results['metric_value_' +layer_name] = metric_value.item()
+
             if (step % ckpt_freq == 0) or (step == len(loader) - 1):
                 # Track accuracy and losses on the ood test data
                 for oodte_name, oodte_loader, oodte_weights in oodte_evals:
@@ -364,6 +369,7 @@ if __name__ == "__main__":
             'find_algo': [args.find_algo],
             # 'fix_algo': [args.fix_algo],
             'granularity': [args.granularity],
+            'track_tta': [args.track_tta],
         }
     if 'least' in args.find_algo.lower():
         # Get the td variant and store as args

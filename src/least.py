@@ -419,7 +419,11 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     # Get mask values for each layer
     mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
 
-    return mask_values
+    # Log intermediate results
+    info = {}
+    info['metric_values_dict'] = metric_values_dict
+
+    return mask_values, info
 
 def diff_lr_optimizer(base_optimizer):
     base_opt_params = base_optimizer.defaults
@@ -449,14 +453,20 @@ def diff_lr(base_optimizer, lr_factor_values):
 
 #TODO: A reset iter_idx function which can be called during optimizer reset
 
-def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_names=None):
-    if 'least' not in mask_algo.lower():
-        return optimizer
+def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_names=None, track_flag=False, **kwargs):
+    info = {}
+    new_opt_flag = False
     
-    mask_values = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names)
+    if 'least' in mask_algo.lower():
+        mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names)
+        new_opt_flag = True
 
-    if len(optimizer.param_groups) == 1:
-        optimizer = diff_lr_optimizer(optimizer)
-    diff_lr(optimizer, mask_values)
+    if new_opt_flag:
+        if len(optimizer.param_groups) == 1:
+            optimizer = diff_lr_optimizer(optimizer)
+        diff_lr(optimizer, mask_values)
 
-    return optimizer
+    if track_flag:
+        return optimizer, info
+    else:
+        return optimizer
