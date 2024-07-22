@@ -95,6 +95,106 @@ def softmax_entropy(x: torch.Tensor) -> torch.Tensor:
     return -(x.softmax(1) * x.log_softmax(1)).sum(1)
 
 
+def get_model_stats(model, layer_names=None):
+    if layer_names is None:
+        layer_names = least.get_all_param_name_list(algorithm, args.granularity)
+        layer_names += [layer_names[0][:-1]] # Add the 'all' layer
+
+    param_dict, grad_dict = {}, {}
+    for layer_name in layer_names:
+        layer_param_list, layer_grad_list = [], []
+        for idx, (name, params) in enumerate(model.named_parameters()):
+            # Skip if no grad
+            if params.requires_grad is False:
+                continue
+
+            # Handle for layer0
+            layer0_cond = False
+            if 'layer0' in layer_name and idx < 3:# and \
+                # isinstance(feat_model, torchvision.models.ResNet):
+                cond1 = layer_name == 'layer0'
+                cond2 = layer_name == 'layer0.conv1' and idx == 0
+                cond3 = layer_name == 'layer0.bn1' and idx >= 1 and idx <= 2
+                layer0_cond = cond1 or cond2 or cond3
+
+            # Add to list if block_name is in name
+            if layer0_cond or layer_name in name:
+                layer_param_list.append(params.flatten())
+
+                if params.grad is None:
+                    layer_grad_list.append(torch.zeros_like(params).flatten())
+                else:
+                    layer_grad_list.append(params.grad.flatten())
+
+        if len(layer_param_list) == 0:
+            continue
+        else:
+            param_dict[layer_name] = torch.cat(layer_param_list).detach().clone()
+            grad_dict[layer_name] = torch.cat(layer_grad_list).detach().clone()
+
+    stats_dict = {}
+    stats_dict['param_dict'] = param_dict
+    stats_dict['grad_dict'] = grad_dict
+
+    return stats_dict
+
+reset_sz = 20       #TODO: make it a hyperparameter
+sum_u = {}
+first_dict = None
+first_dict_with_reset = None
+
+def visualize_layer_stats(next_dict, prev_dict, step):
+    global first_dict, first_dict_with_reset
+    
+    if step == 0:
+        first_dict = copy.deepcopy(prev_dict)
+        first_dict_with_reset = first_dict
+    elif step % reset_sz == 0:
+        first_dict_with_reset = copy.deepcopy(prev_dict)
+
+    layer_names = least.get_all_param_name_list(algorithm, args.granularity)
+    layer_names += [layer_names[0][:-1]] # Add the 'all' layer
+
+    track_batch_results = {}
+    for layer_name in layer_names:
+        # Get all the layer params
+        next_param_layer = next_dict['param_dict'][layer_name]
+        prev_param_layer = prev_dict['param_dict'][layer_name]
+        first_param_layer = first_dict['param_dict'][layer_name]
+        first_param_with_reset_layer = first_dict_with_reset['param_dict'][layer_name]
+
+        # Get all the layer vectors
+        u = next_param_layer - prev_param_layer
+        td = prev_param_layer - first_param_layer
+        td_with_u = next_param_layer - first_param_layer
+        td_with_reset = prev_param_layer - first_param_with_reset_layer
+        td_with_u_with_reset = next_param_layer - first_param_with_reset_layer
+
+        if step == 0:
+            sum_u[layer_name] = torch.zeros_like(u)
+        sum_u[layer_name] += torch.abs(u)
+
+        # Log all the metrics
+        track_batch_results[layer_name + '_u_magn'] = torch.norm(u).item()
+        track_batch_results[layer_name + '_sum_u_magn'] = torch.norm(sum_u[layer_name]).item()
+
+        track_batch_results[layer_name + '_td_magn'] = torch.norm(td).item()
+        track_batch_results[layer_name + '_td_with_u_magn'] = torch.norm(td_with_u).item()
+        track_batch_results[layer_name + '_td_with_reset_magn'] = torch.norm(td_with_reset).item()
+        track_batch_results[layer_name + '_td_with_u_with_reset_magn'] = torch.norm(td_with_u_with_reset).item()
+
+        if torch.norm(td) != 0:
+            track_batch_results[layer_name + '_cos_td_and_u'] = torch.cosine_similarity(td, u, dim=0).item()
+        if torch.norm(td_with_u) != 0:
+            track_batch_results[layer_name + '_cos_td_with_u_and_u'] = torch.cosine_similarity(td_with_u, u, dim=0).item()
+        if torch.norm(td_with_reset) != 0:
+            track_batch_results[layer_name + '_cos_td_with_reset_and_u'] = torch.cosine_similarity(td_with_reset, u, dim=0).item()
+        if torch.norm(td_with_u_with_reset) != 0:
+            track_batch_results[layer_name + '_cos_td_with_u_with_reset_and_u'] = torch.cosine_similarity(td_with_u_with_reset, u, dim=0).item()
+
+    return track_batch_results
+
+
 def accuracy_ent(network, loader, weights, device, adapt=False):
     correct = 0
     total = 0
@@ -172,6 +272,7 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
 
     oodtr_name, loader, weights = oodtr_evals
     total_unsup_loss, total_sup_loss = 0, 0
+    prev_dict = get_model_stats(network)
 
     network.eval()
     with torch.no_grad():
@@ -215,10 +316,16 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
             track_results['batch_sup_loss_'+oodtr_name] = batch_sup_loss.item()
             track_results['oodtr_sup_loss_'+oodtr_name] = total_sup_loss / total
 
+            # Track LEAST based intermediate results
             if 'least' in args.find_algo.lower():
-                # Track LEAST based intermediate results
                 for layer_name, metric_value in network.info['metric_values_dict'].items():
                     track_results['metric_value_' +layer_name] = metric_value.item()
+
+            # Track the layer stats
+            next_dict = get_model_stats(network)
+            track_batch_results = visualize_layer_stats(next_dict, prev_dict, step)
+            track_results.update(track_batch_results)
+            prev_dict = next_dict
 
             if (step % ckpt_freq == 0) or (step == len(loader) - 1):
                 # Track accuracy and losses on the ood test data
