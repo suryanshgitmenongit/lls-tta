@@ -742,6 +742,12 @@ if __name__ == "__main__":
     adapt_hparams_list = [dict(zip(adapt_hparams_dict.keys(), r)) for r in product]
 
     # Perform Model selection (for reducing computation overload and wandb logging)
+    if args.best_hp.lower() in ['first']:
+        adapt_hparams_list[0]['hp_mode'] = "First"
+        adapt_hparams_list = [adapt_hparams_list[0]]
+    elif args.best_hp.lower() in ['last']:
+        adapt_hparams_list[-1]['hp_mode'] = "Last"
+        adapt_hparams_list = [adapt_hparams_list[-1]]
     #TODO: implement leave-one-out model selection
     #TODO: Remove the second condition below
     if args.best_hp.lower() in ['true', 'iid', 'orc', 'man'] and 'domaingen' not in args.find_algo.lower():
