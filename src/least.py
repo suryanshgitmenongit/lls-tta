@@ -460,6 +460,9 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
     if 'least' in mask_algo.lower():
         mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names)
         new_opt_flag = True
+    elif 'layer' in mask_algo.lower() or 'stage' in mask_algo.lower():
+        mask_values = get_box_masks(mask_algo, model, trainable_layer_names)
+        new_opt_flag = True
 
     if new_opt_flag:
         if len(optimizer.param_groups) == 1:
@@ -470,3 +473,18 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
         return optimizer, info
     else:
         return optimizer
+    
+
+############################################################################################################
+# Baselines
+############################################################################################################
+
+def get_box_masks(mask_algo, model, trainable_layer_names):
+    # Compute mask for each specified box
+    mask_dict = {box_name: 1 for box_name in mask_algo.lower().split('_')
+                                if 'layer' in box_name or 'stage' in box_name}
+
+    # Get mask values for each layer
+    mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
+
+    return mask_values
