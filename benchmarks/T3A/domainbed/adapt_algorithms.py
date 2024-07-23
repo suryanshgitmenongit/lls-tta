@@ -125,17 +125,17 @@ class TentFull(Algorithm):
         self.model_state, self.optimizer_state = \
             copy_model_and_optimizer(self.model, self.optimizer)
 
-    def forward(self, x, adapt=False):
+    def forward(self, x, adapt=False, **kwargs):
         if adapt:
             if self.episodic:
                 self.reset()
 
             for _ in range(self.steps):
                 if self.hparams['cached_loader']:
-                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer, **kwargs)
                 else:
                     self.model.featurizer.eval()
-                    outputs = self.forward_and_adapt(x, self.model, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model, self.optimizer, **kwargs)
                     self.model.featurizer.train()
         else:
             if self.hparams['cached_loader']:
@@ -145,7 +145,7 @@ class TentFull(Algorithm):
         return outputs
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
-    def forward_and_adapt(self, x, model, optimizer):
+    def forward_and_adapt(self, x, model, optimizer, **kwargs):
         """Forward and adapt model on batch of data.
         Measure entropy of the model prediction, take gradients, and update params.
         """
@@ -157,7 +157,7 @@ class TentFull(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
             self.info = info
         else:
             optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
@@ -316,17 +316,17 @@ class PseudoLabel(Algorithm):
         self.model_state, self.optimizer_state = \
             copy_model_and_optimizer(self.model, self.optimizer)
 
-    def forward(self, x, adapt=False):
+    def forward(self, x, adapt=False, **kwargs):
         if adapt:
             if self.episodic:
                 self.reset()
 
             for _ in range(self.steps):
                 if self.hparams['cached_loader']:
-                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer, **kwargs)
                 else:
                     self.model.featurizer.eval()
-                    outputs = self.forward_and_adapt(x, self.model, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model, self.optimizer, **kwargs)
                     self.model.featurizer.train()
         else:
             if self.hparams['cached_loader']:
@@ -336,7 +336,7 @@ class PseudoLabel(Algorithm):
         return outputs
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
-    def forward_and_adapt(self, x, model, optimizer):
+    def forward_and_adapt(self, x, model, optimizer, **kwargs):
         """Forward and adapt model on batch of data.
         Measure entropy of the model prediction, take gradients, and update params.
         """
@@ -348,7 +348,7 @@ class PseudoLabel(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
             self.info = info
         else:
             optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
@@ -430,17 +430,17 @@ class SHOT(Algorithm):
         self.model_state, self.optimizer_state = \
             copy_model_and_optimizer(self.model, self.optimizer)
 
-    def forward(self, x, adapt=False):
+    def forward(self, x, adapt=False, **kwargs):
         if adapt:
             if self.episodic:
                 self.reset()
 
             for _ in range(self.steps):
                 if self.hparams['cached_loader']:
-                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model.classifier, self.optimizer, **kwargs)
                 else:
                     self.model.featurizer.eval()
-                    outputs = self.forward_and_adapt(x, self.model, self.optimizer)
+                    outputs = self.forward_and_adapt(x, self.model, self.optimizer, **kwargs)
                     self.model.featurizer.train()
         else:
             if self.hparams['cached_loader']:
@@ -450,7 +450,7 @@ class SHOT(Algorithm):
         return outputs
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
-    def forward_and_adapt(self, x, model, optimizer):
+    def forward_and_adapt(self, x, model, optimizer, **kwargs):
         """Forward and adapt model on batch of data.
         Measure entropy of the model prediction, take gradients, and update params.
         """
@@ -462,7 +462,7 @@ class SHOT(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
             self.info = info
         else:
             optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)

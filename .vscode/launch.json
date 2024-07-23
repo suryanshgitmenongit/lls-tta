@@ -61,7 +61,7 @@
                 // UpdateMask, GradMask, Info
                 // Totaldelta_l:2_bynparam:1
                 // Layer4_es:1_metric:valid_sz:n
-                "--find_algo", "Domaingen",             // Domaingen, None, Least, Layer, Layer1_...
+                "--find_algo", "Domaingen",             // Domaingen, None, Least, Layer, Layer1_..., Valid
                 "--fix_algo", "Difflr",                 // None, Difflr
                 // "--track_tta", "True",               // True, False
                 // "--ckpt_freq", "50",                 // 25, 50, 100

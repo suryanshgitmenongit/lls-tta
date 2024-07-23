@@ -1,5 +1,6 @@
 import torch
 import torchvision
+import torch.nn.functional as F
 
 import copy
 
@@ -119,7 +120,7 @@ def get_td_variant(mask_algo):
     # Create td hparams dictionary with default values
     td_variant = {
         # Metric design choices
-        'nbox'   : 'n',         # number of boxes: 1, n
+        'nbox'   : '1',         # number of boxes: 1, n
         'curr'   : 'next',      # td = <> - anchor: next, prev
         'bin'    : '1',         # binarize the mask: 0, 1
         'trust'  : 'low',       # trust on init samples: high, low
@@ -422,6 +423,7 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     # Log intermediate results
     info = {}
     info['metric_values_dict'] = metric_values_dict
+    info['mask_dict'] = mask_dict
 
     return mask_values, info
 
@@ -463,6 +465,9 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
     elif 'layer' in mask_algo.lower() or 'stage' in mask_algo.lower():
         mask_values = get_box_masks(mask_algo, model, trainable_layer_names)
         new_opt_flag = True
+    elif 'valid' in mask_algo.lower():
+        mask_values, info = get_valid_mask(mask_algo, model, optimizer, iter_idx, trainable_layer_names, **kwargs)
+        new_opt_flag = True
 
     if new_opt_flag:
         if len(optimizer.param_groups) == 1:
@@ -488,3 +493,133 @@ def get_box_masks(mask_algo, model, trainable_layer_names):
     mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
 
     return mask_values
+
+
+def get_es_variant(mask_algo):
+    # Create td hparams dictionary with default values
+    td_variant = {
+        'pat'       : '5',      # Early stopping patience: 0, 3, 5, 10
+        'type'      : 'hard',   # Early stopping type: hard, soft
+        'dataset'   : 'ood',    # Early stopping set: iid, ood
+        'lvl'       : 'Block',  # Early stopping granularity: Layer, Block, Subblock
+    }
+
+    # Update the td hparams dictionary with the given hyperparameters
+    for hparam in mask_algo.split('_'):
+        if ':' in hparam:
+            key, value = hparam.split(':')
+            if key not in td_variant:
+                raise ValueError('Invalid mask_hparam : {}'.format(key))
+            td_variant[key] = value.lower()
+    
+    return td_variant
+
+def early_stopping_with_loss(loss, patience, iter_idx, box_name):
+    global min_loss_dict, steps_no_improve_dict
+
+    # If the first step
+    if iter_idx == 0:
+        min_loss_dict[box_name] = float('inf')
+        steps_no_improve_dict[box_name] = 0
+
+    # If the validation loss is at a minimum
+    if loss <= min_loss_dict[box_name]:
+        min_loss_dict[box_name] = loss
+        steps_no_improve_dict[box_name] = 0
+    else:
+        steps_no_improve_dict[box_name] += 1
+        # Check early stopping condition
+        if steps_no_improve_dict[box_name] > patience:
+            return True
+        
+    return False
+
+min_loss_dict, steps_no_improve_dict = {}, {}
+stop_flag_dict = {}
+def get_valid_mask(mask_algo, model, base_optimizer, iter_idx, trainable_layer_names, **kwargs):
+    global stop_flag_dict
+
+    ### Prepare everything
+    # Get the es variant
+    es_variant = get_es_variant(mask_algo)
+    es_variant['iter_idx'] = iter_idx
+    
+    # Get all the block names
+    granularity = es_variant['lvl']
+    box_names = get_all_param_name_list(model, granularity)
+
+    if iter_idx == 0:
+        stop_flag_dict = {box_name: False for box_name in box_names}
+
+    # Get the data loader for the validation set
+    if es_variant['dataset'] == 'iid':
+        loader = kwargs['iidte_loader']
+    elif es_variant['dataset'] == 'ood':
+        loader = kwargs['oodte_loader']
+
+    # Log intermediate results
+    info = {}
+    info['valid_loss_dict'] = {}
+
+    # Copy all the current model parameters and gradients
+    all_curr_params_dict = {name: params.data.clone() \
+                            for name, params in model.named_parameters()}
+    all_curr_grads_dict = {name: params.grad.clone() \
+                            for name, params in model.named_parameters()}
+    
+    ### Simulate the optimizer step and get mask dict
+    mask_dict = {}
+    for box_name in box_names:
+        # No need to check for early stopping if already stopped
+        if es_variant['type'] == 'hard' and stop_flag_dict[box_name] == True:
+            mask_dict[box_name] = 0
+            continue
+
+        # Get the parameter list for optimizer step (without cloning)
+        temp_params_list = []
+        for idx, (name, params) in enumerate(model.named_parameters()):
+            trainable_layer = is_layer_trainable(name, trainable_layer_names)
+            if params.requires_grad == True and trainable_layer:
+                # if box_name == 'layer0' and idx < 3: # and \
+                #     # isinstance(model, torchvision.models.ResNet):
+                #     temp_params_list.append(params)
+                #     before_params_dict[box_name].append(params.data.clone())
+                if box_name in name:
+                    temp_params_list.append(params)
+
+        # Get the base optimizer's parameters
+        base_opt_params = copy.deepcopy(base_optimizer.defaults)
+
+        # Temporary optimizer step for the model
+        temp_optimizer = type(base_optimizer)(temp_params_list, **base_opt_params)
+        temp_optimizer.step()
+
+        # Get the loss for the validation set
+        sup_loss = 0
+        device = params.device      #TODO: adhoc, do it cleanly
+        with torch.no_grad():
+            for x, y in loader:
+                x = x.to(device)
+                y = y.to(device)
+                p = model(x)
+                sup_loss += F.cross_entropy(p, y).item()
+
+        stop_flag = early_stopping_with_loss(sup_loss, int(es_variant['pat']), iter_idx, box_name)
+        stop_flag_dict[box_name] = stop_flag
+        info['valid_loss_dict'][box_name] = sup_loss
+
+        # Compute mask for each box
+        mask_dict[box_name] = 1 if stop_flag == False else 0
+
+        # Restore all the current model's parameters and grads
+        for name, params in model.named_parameters():
+            params.data = all_curr_params_dict[name]
+            params.grad = all_curr_grads_dict[name]
+
+    # print('Mask values : ', mask_dict)
+
+    # Get mask values for each layer
+    mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
+    info['mask_dict'] = mask_dict
+
+    return mask_values, info

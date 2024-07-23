@@ -281,6 +281,8 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
             y = y.to(device)
             if adapt is None:
                 p = network(x)
+            elif 'valid' in args.find_algo.lower() and adapt:
+                p = network(x, adapt, oodte_loader=oodte_evals[0][1], iidte_loader=iidte_evals[0][1])
             else:
                 p = network(x, adapt)
             if weights is None:
@@ -316,10 +318,15 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
             track_results['batch_sup_loss_'+oodtr_name] = batch_sup_loss.item()
             track_results['oodtr_sup_loss_'+oodtr_name] = total_sup_loss / total
 
-            # Track LEAST based intermediate results
+            # Track mask based intermediate results
             if 'least' in args.find_algo.lower():
                 for layer_name, metric_value in network.info['metric_values_dict'].items():
                     track_results['metric_value_' +layer_name] = metric_value.item()
+            elif 'valid' in args.find_algo.lower():
+                for layer_name, mask_value in network.info['mask_dict'].items():
+                    track_results['mask_value_' +layer_name] = mask_value
+                for layer_name, loss_value in network.info['valid_loss_dict'].items():
+                    track_results['valid_loss_' +layer_name] = loss_value
 
             # Track the layer stats
             next_dict = get_model_stats(network)
@@ -485,8 +492,8 @@ if __name__ == "__main__":
         for k, v in td_variant.items():
             setattr(args, "LEAST_"+k, v)
         
-    if os.path.exists(os.path.join(args.output_dir, 'done_{}_{}'.format(alg_name, loc_alg_name))):
-        print("{} with {} has already excecuted".format(alg_name, loc_alg_name))
+    if os.path.exists(os.path.join(args.output_dir, 'done_{}_{}_{}'.format(alg_name, loc_alg_name, args.best_hp.lower()))):
+        print("{} with {} with best_hp:{} has already executed".format(alg_name, loc_alg_name, args.best_hp.lower()))
 
     # If we ever want to implement checkpointing, just persist these values
     # every once in a while, and then load them from disk here.
