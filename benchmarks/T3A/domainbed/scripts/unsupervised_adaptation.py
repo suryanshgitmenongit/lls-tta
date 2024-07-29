@@ -21,6 +21,8 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import torch.utils.data
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import sys
 sys.path.append('../../src')
 import least
@@ -139,12 +141,13 @@ def get_model_stats(model, layer_names=None):
     return stats_dict
 
 reset_sz = 20       #TODO: make it a hyperparameter
+all_u, all_td = {}, {}
 sum_u = {}
 first_dict = None
 first_dict_with_reset = None
 
 def visualize_layer_stats(next_dict, prev_dict, step):
-    global first_dict, first_dict_with_reset
+    global first_dict, first_dict_with_reset, all_u, all_td, sum_u
     
     if step == 0:
         first_dict = copy.deepcopy(prev_dict)
@@ -172,7 +175,11 @@ def visualize_layer_stats(next_dict, prev_dict, step):
 
         if step == 0:
             sum_u[layer_name] = torch.zeros_like(u)
+            all_u[layer_name] = []
+            all_td[layer_name] = []
         sum_u[layer_name] += torch.abs(u)
+        all_u[layer_name].append(u.detach().cpu().clone())
+        all_td[layer_name].append(td.detach().cpu().clone())
 
         # Log all the metrics
         track_batch_results[layer_name + '_u_magn'] = torch.norm(u).item()
@@ -182,6 +189,10 @@ def visualize_layer_stats(next_dict, prev_dict, step):
         track_batch_results[layer_name + '_td_with_u_magn'] = torch.norm(td_with_u).item()
         track_batch_results[layer_name + '_td_with_reset_magn'] = torch.norm(td_with_reset).item()
         track_batch_results[layer_name + '_td_with_u_with_reset_magn'] = torch.norm(td_with_u_with_reset).item()
+        track_batch_results[layer_name + '_td_by_d_magn'] = torch.norm(td).item() / td.numel()
+        track_batch_results[layer_name + '_td_with_u_by_d_magn'] = torch.norm(td_with_u).item() / td_with_u.numel()
+        track_batch_results[layer_name + '_td_with_reset_by_d_magn'] = torch.norm(td_with_reset).item() / td_with_reset.numel()
+        track_batch_results[layer_name + '_td_with_u_with_reset_by_d_magn'] = torch.norm(td_with_u_with_reset).item() / td_with_u_with_reset.numel()
 
         if torch.norm(td) != 0:
             track_batch_results[layer_name + '_cos_td_and_u'] = torch.cosine_similarity(td, u, dim=0).item()
@@ -193,6 +204,65 @@ def visualize_layer_stats(next_dict, prev_dict, step):
             track_batch_results[layer_name + '_cos_td_with_u_with_reset_and_u'] = torch.cosine_similarity(td_with_u_with_reset, u, dim=0).item()
 
     return track_batch_results
+
+
+def visualize_layer_movement():
+    def pca(X, k=2):
+        # Centering the data
+        X_mean = torch.mean(X,0)
+        X = X - X_mean.expand_as(X)
+
+        # Computing the covariance matrix
+        U,S,V = torch.svd(torch.t(X))
+        return torch.mm(X,U[:,:k]), S/torch.sum(S)
+    
+    vis_results = {}
+    td_explained_variance_dict = {}
+    for layer_name, td_list in all_td.items():
+        # Create a torch tensor of vectors
+        X_td = torch.stack(td_list)
+
+        # Perform PCA
+        X_td_pca, td_explained_variance = pca(X_td, k=2)
+        td_explained_variance_dict[layer_name] = td_explained_variance
+        
+        # Center the data at the first point
+        X_td_pca = X_td_pca - X_td_pca[0]
+
+        # Create a plot of X_td_pca arrows, connecting consecutive points
+        cmap = mcolors.LinearSegmentedColormap.from_list("n", ["blue", "red"])
+        fig = plt.figure(figsize=(10,10))
+        
+        colors = cmap(np.linspace(0, 1, len(X_td_pca)))
+        for i in range(len(X_td_pca) - 1):
+            plt.arrow(X_td_pca[i,0], X_td_pca[i,1], 
+              X_td_pca[i+1,0] - X_td_pca[i,0], 
+              X_td_pca[i+1,1] - X_td_pca[i,1], 
+              width=0.0001,
+              fc=colors[i],
+              ec=colors[i])
+        plt.scatter(0, 0, c='black', s=50)
+        plt.title("Layer: {} - td".format(layer_name))
+        plt.grid()
+        plt.xlabel("Principal Component 1")
+        plt.ylabel("Principal Component 2")
+        plt.axis('equal')
+        # plt.savefig(layer_name + '_td_movement.png')
+        vis_results[layer_name + '_td_movement'] = wandb.Image(fig)
+
+    # Plot all the explained variance
+    fig = plt.figure(figsize=(10,10))
+    for layer_name, td_explained_variance in td_explained_variance_dict.items():
+        plt.plot(td_explained_variance, 'o-', label=layer_name)
+    plt.legend()
+    plt.title("Explained Variance")
+    plt.xlabel("Principal Component")
+    plt.ylabel("Variance Explained")
+    plt.grid()
+    # plt.savefig('explained_variance.png')
+    vis_results[layer_name + '_explained_variance'] = wandb.Image(fig)
+
+    return vis_results
 
 
 def accuracy_ent(network, loader, weights, device, adapt=False):
@@ -322,6 +392,8 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
             if 'least' in args.find_algo.lower():
                 for layer_name, metric_value in network.info['metric_values_dict'].items():
                     track_results['metric_value_' +layer_name] = metric_value.item()
+                for layer_name, mask_value in network.info['mask_dict'].items():
+                    track_results['mask_value_' +layer_name] = mask_value
             elif 'valid' in args.find_algo.lower():
                 for layer_name, mask_value in network.info['mask_dict'].items():
                     track_results['mask_value_' +layer_name] = mask_value
@@ -352,6 +424,8 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
 
             # Log the tracked results
             wandb.log(track_results, step=step)
+        # vis_results = visualize_layer_movement()
+        # wandb.log(vis_results, step=step)
 
     network.train()
 
