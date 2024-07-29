@@ -348,14 +348,13 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     box_names = get_all_param_name_list(model, granularity)
 
     # Copy all the current model parameters and gradients
-    all_curr_params_dict = {name: params.data.clone() \
-                            for name, params in model.named_parameters()}
-    # Since total delta is only used in the adaptation phase,
-    # we can assume that grad is not None
-    # It is good that grad.clone breaks if grad is None
-    # TODO: make it explicit
-    all_curr_grads_dict = {name: params.grad.clone() \
-                            for name, params in model.named_parameters()}
+    all_curr_params_dict, all_curr_grads_dict = {}, {}
+    for name, params in model.named_parameters():
+        all_curr_params_dict[name] = params.data.clone()
+        if params.grad is None:
+            all_curr_grads_dict[name] = None
+        else:
+            all_curr_grads_dict[name] = params.grad.clone()
     
     ### Step 2: Simulate the optimizer step for cloned model and optimizer
     # Get the base optimizer's parameters
@@ -458,6 +457,9 @@ def diff_lr(base_optimizer, lr_factor_values):
 def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_names=None, track_flag=False, **kwargs):
     info = {}
     new_opt_flag = False
+
+    if trainable_layer_names is not None:
+        trainable_layer_names = [get_clean_layer_name(name) for name in trainable_layer_names]
     
     if 'least' in mask_algo.lower():
         mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names)
@@ -562,10 +564,13 @@ def get_valid_mask(mask_algo, model, base_optimizer, iter_idx, trainable_layer_n
     info['valid_loss_dict'] = {}
 
     # Copy all the current model parameters and gradients
-    all_curr_params_dict = {name: params.data.clone() \
-                            for name, params in model.named_parameters()}
-    all_curr_grads_dict = {name: params.grad.clone() \
-                            for name, params in model.named_parameters()}
+    all_curr_params_dict, all_curr_grads_dict = {}, {}
+    for name, params in model.named_parameters():
+        all_curr_params_dict[name] = params.data.clone()
+        if params.grad is None:
+            all_curr_grads_dict[name] = None
+        else:
+            all_curr_grads_dict[name] = params.grad.clone()
     
     ### Simulate the optimizer step and get mask dict
     mask_dict = {}

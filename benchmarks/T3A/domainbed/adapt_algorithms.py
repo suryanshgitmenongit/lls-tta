@@ -34,6 +34,11 @@ def get_algorithm_class(algorithm_name):
     return globals()[algorithm_name]
 
 
+def get_trainable_names(model):
+    """Returns a list of trainable parameter names"""
+    return [name for name, p in model.named_parameters() if p.requires_grad]
+
+
 class T3A(Algorithm):
     """
     Test Time Template Adjustments (T3A)
@@ -157,10 +162,11 @@ class TentFull(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -172,6 +178,7 @@ class TentFull(Algorithm):
         adapted_algorithm = copy.deepcopy(algorithm)
         adapted_algorithm.featurizer = configure_model(adapted_algorithm.featurizer)
         params, param_names = collect_params(adapted_algorithm.featurizer)
+        self.trainable_names = param_names
         optimizer = torch.optim.Adam(
             params, 
             lr=algorithm.hparams["lr"]*alpha,
@@ -202,6 +209,7 @@ class TentPreBN(TentFull):
         adapted_algorithm = copy.deepcopy(algorithm)
         adapted_algorithm.classifier = PreBN(adapted_algorithm.classifier, adapted_algorithm.featurizer.n_outputs)
         adapted_algorithm.network = torch.nn.Sequential(adapted_algorithm.featurizer, adapted_algorithm.classifier)
+        self.trainable_names = get_trainable_names(adapted_algorithm.classifier.bn)
         optimizer = torch.optim.Adam(
             adapted_algorithm.classifier.bn.parameters(), 
             lr=algorithm.hparams["lr"] * alpha,
@@ -213,6 +221,7 @@ class TentPreBN(TentFull):
 class TentClf(TentFull):
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
+        self.trainable_names = get_trainable_names(adapted_algorithm.classifier)
         optimizer = torch.optim.Adam(
             adapted_algorithm.classifier.parameters(), 
             lr=algorithm.hparams["lr"]  * alpha,
@@ -348,10 +357,11 @@ class PseudoLabel(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -364,6 +374,7 @@ class PseudoLabel(Algorithm):
 
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
+        self.trainable_names = get_trainable_names(adapted_algorithm)
         optimizer = torch.optim.Adam(
             adapted_algorithm.parameters(), 
             lr=algorithm.hparams["lr"]  * alpha,
@@ -385,6 +396,7 @@ class PseudoLabel(Algorithm):
 class PLClf(PseudoLabel):
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
+        self.trainable_names = get_trainable_names(adapted_algorithm.classifier)
         optimizer = torch.optim.Adam(
             adapted_algorithm.classifier.parameters(), 
             lr=algorithm.hparams["lr"]  * alpha,
@@ -462,10 +474,11 @@ class SHOT(Algorithm):
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -490,6 +503,7 @@ class SHOT(Algorithm):
 
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
+        self.trainable_names = get_trainable_names(adapted_algorithm.featurizer)
         optimizer = torch.optim.Adam(
             adapted_algorithm.featurizer.parameters(), 
             # adapted_algorithm.classifier.parameters(), 

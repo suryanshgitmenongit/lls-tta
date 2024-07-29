@@ -50,7 +50,7 @@
                 // "--checkpoint_freq", "25",
 
                 "--data_dir", "/home-local2/sasah14.extra.nobkp/scratch/data/",
-                "--adapt_algorithm", "PseudoLabel",     // PseudoLabel, SHOT
+                "--adapt_algorithm", "PseudoLabel",     // PseudoLabel, SHOT, TentFull
                 "--granularity", "Block",               // None, Block, Subblock, Layer
                 // DomainGen, DomainGen_Stats, DomainGen_Synth,
                 // None, Best, Bestmulti,
