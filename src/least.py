@@ -3,6 +3,7 @@ import torchvision
 import torch.nn.functional as F
 
 import copy
+import random
 
 
 def remove_duplicates(seq):
@@ -125,6 +126,7 @@ def get_td_variant(mask_algo):
         'bin'    : '1',         # binarize the mask: 0, 1
         'trust'  : 'low',       # trust on init samples: high, low
         'lvl'    : 'Layer',     # granularity of the model: Layer, Block, Subblock
+        'type'   : 'best',      # type of mask: best, notbest, worst, random
 
         # Metric's hyperparameters
         'sz'     : '20',        # window size: 5, 20, n
@@ -257,6 +259,15 @@ def get_mistrust_window_sz(td_variant):
     return int(sz * sthr)
 
 def compute_mask(metric_values_dict, td_variant):
+    # Worst case scenario: train the worst box
+    type = td_variant['type']
+    if type == 'worst':
+        return compute_worst_mask(metric_values_dict, td_variant)
+    if type == 'notbest':
+        return compute_not_best_mask(metric_values_dict, td_variant)
+    elif type == 'random':
+        return compute_random_mask(metric_values_dict, td_variant)
+
     # Clone the metric_values_dict to mask_dict
     mask_dict = copy.deepcopy(metric_values_dict)
 
@@ -264,8 +275,9 @@ def compute_mask(metric_values_dict, td_variant):
     nbox = td_variant['nbox']
     if nbox == '1':
         # Single box: Store the mask for box with max metric value
+        max_mask_value = max(mask_dict.values())
         for box_name, mask_value in mask_dict.items():
-            if mask_value == max(mask_dict.values()):
+            if mask_value == max_mask_value:
                 mask_dict[box_name] = mask_value
             else:
                 mask_dict[box_name] = 0      
@@ -628,3 +640,48 @@ def get_valid_mask(mask_algo, model, base_optimizer, iter_idx, trainable_layer_n
     info['mask_dict'] = mask_dict
 
     return mask_values, info
+
+def compute_worst_mask(metric_values_dict, td_variant):
+    # Clone the metric_values_dict to mask_dict
+    mask_dict = copy.deepcopy(metric_values_dict)
+
+    # Worst case scenario: train the worst box
+    min_mask_value = min(mask_dict.values())
+    for box_name, mask_value in mask_dict.items():
+        if mask_value == min_mask_value:
+            mask_dict[box_name] = 1
+        else:
+            mask_dict[box_name] = 0
+
+    return mask_dict
+
+def compute_not_best_mask(metric_values_dict, td_variant):
+    # Clone the metric_values_dict to mask_dict
+    mask_dict = copy.deepcopy(metric_values_dict)
+
+    # Worst case scenario: train the worst box
+    max_mask_value = max(mask_dict.values())
+    first_sample_in_window = sum(mask_dict.values()).item() == len(mask_dict)
+    for box_name, mask_value in mask_dict.items():
+        if mask_value != max_mask_value or first_sample_in_window:
+            mask_dict[box_name] = 1
+        else:
+            mask_dict[box_name] = 0
+
+    return mask_dict
+
+def compute_random_mask(metric_values_dict, td_variant):
+    # Clone the metric_values_dict to mask_dict
+    mask_dict = copy.deepcopy(metric_values_dict)
+
+    # Choose a random box to train
+    random_box = random.choice(list(mask_dict.keys()))
+
+    # Train the random box
+    for box_name, mask_value in mask_dict.items():
+        if box_name == random_box:
+            mask_dict[box_name] = 1
+        else:
+            mask_dict[box_name] = 0
+
+    return mask_dict
