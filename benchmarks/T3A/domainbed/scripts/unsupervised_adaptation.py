@@ -216,6 +216,15 @@ def visualize_layer_movement():
         U,S,V = torch.svd(torch.t(X))
         return torch.mm(X,U[:,:k]), S/torch.sum(S)
     
+    def get_effective_rank(normalized_eigenvalues):
+        # Calculate the entropy
+        entropy = -torch.sum(normalized_eigenvalues * torch.log(normalized_eigenvalues))
+        
+        # Calculate the effective rank
+        effective_rank = torch.exp(entropy)
+        
+        return effective_rank.item()
+    
     vis_results = {}
     td_explained_variance_dict = {}
     for layer_name, td_list in all_td.items():
@@ -248,7 +257,13 @@ def visualize_layer_movement():
         plt.ylabel("Principal Component 2")
         plt.axis('equal')
         # plt.savefig(layer_name + '_td_movement.png')
+
         vis_results[layer_name + '_td_movement'] = wandb.Image(fig)
+        vis_results[layer_name + '_effective_rank'] = get_effective_rank(td_explained_variance)
+        vis_results[layer_name + '_variance_pc1'] = td_explained_variance[0].item()
+        vis_results[layer_name + '_variance_pc2'] = td_explained_variance[1].item()
+        vis_results[layer_name + '_variance_pc3'] = td_explained_variance[2].item()
+        
 
     # Plot all the explained variance
     fig = plt.figure(figsize=(10,10))
@@ -394,6 +409,8 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
                     track_results['metric_value_' +layer_name] = metric_value.item()
                 for layer_name, mask_value in network.info['mask_dict'].items():
                     track_results['mask_value_' +layer_name] = mask_value
+                for layer_name, mask_value in network.info['mask_dict'].items():
+                    track_results['selected_value_' +layer_name] = int(mask_value > 0)
             elif 'valid' in args.find_algo.lower():
                 for layer_name, mask_value in network.info['mask_dict'].items():
                     track_results['mask_value_' +layer_name] = mask_value
