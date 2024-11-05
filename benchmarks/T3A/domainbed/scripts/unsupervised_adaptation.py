@@ -991,9 +991,12 @@ if __name__ == "__main__":
         if args.track_tta.lower() != 'true':
             name, loader, weights = train_loader
             print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
+            start_time = time.time()
             # acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
             #TODO: temporary fix to get noise values, remove this
             acc, ent, p_noise_list, fp_noise_list = accuracy_ent_noise(adapted_algorithm, loader, weights, device, adapt=True)
+            adapt_time = time.time() - start_time
+            results[name+'_time'] = adapt_time
 
             results[name+'_pnoise'] = np.mean(p_noise_list)
             results[name+'_fpnoise'] = np.mean(fp_noise_list)
