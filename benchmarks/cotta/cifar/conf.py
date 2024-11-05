@@ -107,8 +107,12 @@ _C.TEST.BATCH_SIZE = 128
 # --------------------------------- CUDNN options --------------------------- #
 _C.CUDNN = CfgNode()
 
+# Ensure reproducibility
+_C.CUDNN.DETERMINISTIC = True
+
 # Benchmark to select fastest CUDNN algorithms (best for fixed input sizes)
-_C.CUDNN.BENCHMARK = True
+# Setting this to False for reproducibility
+_C.CUDNN.BENCHMARK = not _C.CUDNN.DETERMINISTIC
 
 # ---------------------------------- Misc options --------------------------- #
 
@@ -208,6 +212,7 @@ def load_cfg_fom_args(description="Config options."):
     np.random.seed(cfg.RNG_SEED)
     torch.manual_seed(cfg.RNG_SEED)
     random.seed(cfg.RNG_SEED)
+    torch.backends.cudnn.deterministic = cfg.CUDNN.DETERMINISTIC
     torch.backends.cudnn.benchmark = cfg.CUDNN.BENCHMARK
 
     logger = logging.getLogger(__name__)

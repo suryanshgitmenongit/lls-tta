@@ -66,6 +66,8 @@ def evaluate(description):
             logger.info(f"error % [{corruption_type}{severity}]: {err:.2%}")
             running_mean = (running_mean * i_c + err) / (i_c + 1)
             logger.info(f"running mean error %: {running_mean:.2%}")
+            # if corruption_type == 'impulse_noise' and severity == 5:
+            #     break
 
 
 def setup_source(model):
