@@ -16,6 +16,7 @@ import wandb
 from tqdm import tqdm
 
 import numpy as np
+import pandas as pd
 import PIL
 import torch
 import torch.nn.functional as F
@@ -310,6 +311,58 @@ def accuracy_ent(network, loader, weights, device, adapt=False):
     network.train()
 
     return correct / total, ent / total
+
+def get_batch_noise(network, x, y):
+    train_state = network.training
+    network.eval()
+    outputs = network(x, adapt=False)
+    py, y_prime = F.softmax(outputs, dim=-1).max(1)
+
+    prediction_acc = y_prime.eq(y).float().sum().item() / len(y)
+    prediction_noise = 1 - prediction_acc
+
+    flag = py > adapt_hparams['beta']
+    filtered_prediction_acc = y_prime[flag].eq(y[flag]).float().sum().item() / len(y[flag])
+    filtered_prediction_noise = 1 - filtered_prediction_acc
+
+    if train_state:
+        network.train()
+    return prediction_noise, filtered_prediction_noise
+
+def accuracy_ent_noise(network, loader, weights, device, adapt=False):
+    correct = 0
+    total = 0
+    weights_offset = 0
+    ent = 0
+    p_noise_list, fp_noise_list = [], []
+
+    network.eval()
+    with torch.no_grad():
+        for x, y in tqdm(loader, total=len(loader), desc='accuracy_ent_noise', disable=PRODN):
+            x = x.to(device)
+            y = y.to(device)
+            p_noise, fp_noise = get_batch_noise(network, x, y)
+            p_noise_list.append(p_noise)
+            fp_noise_list.append(fp_noise)
+            if adapt is None:
+                p = network(x)
+            else:
+                p = network(x, adapt)
+            if weights is None:
+                batch_weights = torch.ones(len(x))
+            else:
+                batch_weights = weights[weights_offset: weights_offset + len(x)]
+                weights_offset += len(x)
+            batch_weights = batch_weights.to(device)
+            if p.size(1) == 1:
+                correct += (p.gt(0).eq(y).float() * batch_weights.view(-1, 1)).sum().item()
+            else:
+                correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
+            total += batch_weights.sum().item()
+            ent += softmax_entropy(p).sum().item()
+    network.train()
+
+    return correct / total, ent / total, p_noise_list, fp_noise_list
 
 
 def accuracy_ent_loss(network, loader, weights, device, adapt=False):
@@ -938,7 +991,14 @@ if __name__ == "__main__":
         if args.track_tta.lower() != 'true':
             name, loader, weights = train_loader
             print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-            acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+            # acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+            #TODO: temporary fix to get noise values, remove this
+            acc, ent, p_noise_list, fp_noise_list = accuracy_ent_noise(adapted_algorithm, loader, weights, device, adapt=True)
+
+            results[name+'_pnoise'] = np.mean(p_noise_list)
+            results[name+'_fpnoise'] = np.mean(fp_noise_list)
+            noise_df = pd.DataFrame({'p_noise': p_noise_list, 'fp_noise': fp_noise_list})
+            noise_df.to_csv(os.path.join(args.output_dir, 'noise_{}_{}.csv'.format(alg_name, loc_alg_name)), index=False)
         else:
             oodtr_evals = train_loader
             oodte_evals, iidte_evals = [], []
