@@ -439,6 +439,50 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
 
     return mask_values, info
 
+def get_auto_rgn_values(param_groups):
+    '''
+    Adapted from https://github.com/anniesch/surgical-finetuning/blob/main/main.py
+    '''
+    # Compute the RGNs for each layer
+    rgn_values = []
+    for group in param_groups:
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            grad_norm = p.grad.norm()
+            param_norm = p.norm()
+            rgn = grad_norm / (param_norm)
+            rgn_values.append(rgn)
+
+    # Normalize RGNs between 0 and 1
+    rgn_values = torch.tensor(rgn_values)
+    rgn_values = (rgn_values) / (rgn_values.max())
+    
+    return rgn_values
+
+def get_auto_snr_values(param_groups):
+    '''
+    Adapted from https://github.com/anniesch/surgical-finetuning/blob/main/main.py
+    '''
+    # Compute the SNRs for each layer as
+    snr_values = []
+    for group in param_groups:
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            grad = p.grad
+            snr = (grad*grad) / (torch.var(grad, dim=0, keepdim=True)+1e-8)
+            snr = snr.mean()
+            snr_values.append(snr)
+
+    # Normalize SNRs between 0 and 1
+    snr_values = torch.tensor(snr_values)
+    snr_values = torch.where(snr_values < 0.95,
+                             torch.zeros_like(snr_values),
+                             torch.ones_like(snr_values))
+
+    return snr_values
+
 def diff_lr_optimizer(base_optimizer):
     base_opt_params = base_optimizer.defaults
     base_lr = base_opt_params['lr']
@@ -482,6 +526,12 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
         new_opt_flag = True
     elif 'valid' in mask_algo.lower():
         mask_values, info = get_valid_mask(mask_algo, model, optimizer, iter_idx, trainable_layer_names, **kwargs)
+        new_opt_flag = True
+    elif 'autorgn' in mask_algo.lower():
+        mask_values = get_auto_rgn_values(optimizer.param_groups)
+        new_opt_flag = True
+    elif 'autosnr' in mask_algo.lower():
+        mask_values = get_auto_snr_values(optimizer.param_groups)
         new_opt_flag = True
 
     if new_opt_flag:
