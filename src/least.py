@@ -127,6 +127,7 @@ def get_td_variant(mask_algo):
         'trust'  : 'low',       # trust on init samples: high, low
         'lvl'    : 'Layer',     # granularity of the model: Layer, Block, Subblock
         'type'   : 'best',      # type of mask: best, notbest, worst, random
+        'order'  : '0',         # seed for deciding sample order: 0, 1, 2
 
         # Metric's hyperparameters
         'sz'     : '20',        # window size: 5, 20, n

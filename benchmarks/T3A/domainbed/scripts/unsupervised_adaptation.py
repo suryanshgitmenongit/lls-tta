@@ -629,10 +629,11 @@ if __name__ == "__main__":
             'granularity': [args.granularity],
             'track_tta': [args.track_tta],
         }
+    # Get the td variant
+    mask_algo = args.find_algo + '_lvl:' + args.granularity
+    td_variant = least.get_td_variant(mask_algo)
     if 'least' in args.find_algo.lower():
-        # Get the td variant and store as args
-        mask_algo = args.find_algo + '_lvl:' + args.granularity
-        td_variant = least.get_td_variant(mask_algo)
+        # Store td variant as args
         for k, v in td_variant.items():
             setattr(args, "LEAST_"+k, v)
         
@@ -740,21 +741,22 @@ if __name__ == "__main__":
             uda_splits.append((uda, uda_weights))
 
     # Use out splits as training data (to fair comparison with train.py)
-    if CONST_ORDER:
-        print("Get all train loaders")
-        train_loaders = [list(FastDataLoader(
-            dataset=env,
-            batch_size=hparams['batch_size'],
-            num_workers=dataset.N_WORKERS))
-            for i, (env, env_weights) in enumerate(out_splits)
-            if i in args.test_envs]
-    else:
-        train_loaders = [FastDataLoader(
+    train_loaders = [FastDataLoader(
             dataset=env,
             batch_size=hparams['batch_size'],
             num_workers=dataset.N_WORKERS)
             for i, (env, env_weights) in enumerate(out_splits)
             if i in args.test_envs]
+    if CONST_ORDER:
+        print("Get all train loaders")
+        order_seed = int(td_variant['order'])   # default is 0
+        train_loaders_new = []
+        for loader in train_loaders:
+            # Save the last copy of the loader based on the order seed
+            for _ in range(order_seed+1):
+                new_loader = list(loader)
+            train_loaders_new.append(new_loader)
+        train_loaders = train_loaders_new
     
     uda_loaders = [InfiniteDataLoader(
         dataset=env,
@@ -764,19 +766,21 @@ if __name__ == "__main__":
         for i, (env, env_weights) in enumerate(uda_splits)
         if i in args.test_envs]
 
+    eval_loaders = [FastDataLoader(
+        dataset=env,
+        batch_size=args.test_batch_size,
+        num_workers=dataset.N_WORKERS)
+        for env, _ in (in_splits + out_splits + uda_splits)]
     if CONST_ORDER:
         print("Get all eval loaders")
-        eval_loaders = [list(FastDataLoader(
-            dataset=env,
-            batch_size=args.test_batch_size,
-            num_workers=dataset.N_WORKERS))
-            for env, _ in tqdm((in_splits + out_splits + uda_splits), desc="eval_loaders", disable=PRODN)]
-    else:
-        eval_loaders = [FastDataLoader(
-            dataset=env,
-            batch_size=args.test_batch_size,
-            num_workers=dataset.N_WORKERS)
-            for env, _ in (in_splits + out_splits + uda_splits)]
+        order_seed = int(td_variant['order'])   # default is 0
+        eval_loaders_new = []
+        for loader in tqdm(eval_loaders, desc="eval_loaders", disable=PRODN):
+            # Save the last copy of the loader based on the order seed
+            for _ in range(order_seed+1):
+                new_loader = list(loader)
+            eval_loaders_new.append(new_loader)
+        eval_loaders = eval_loaders_new
     eval_weights = [None for _, weights in (in_splits + out_splits + uda_splits)]
     eval_loader_names = ['env{}_in'.format(i)
         for i in range(len(in_splits))]
