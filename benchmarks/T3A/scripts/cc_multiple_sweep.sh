@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --gres=gpu:2            # Request GPU "generic resources"
-#SBATCH --cpus-per-task=16      # Refer to cluster's documentation for the right CPU/GPU ratio
-#SBATCH --mem=64000M            # Memory proportional to GPUs: 32000 Cedar, 47000 Béluga, 64000 Graham.
-#SBATCH --time=0-06:00:00       # DD-HH:MM:SS
-#SBATCH --array=0-23
+#SBATCH --gres=gpu:1            # Request GPU "generic resources"
+#SBATCH --cpus-per-task=8      # Refer to cluster's documentation for the right CPU/GPU ratio
+#SBATCH --mem=32000M            # Memory proportional to GPUs: 32000 Cedar, 47000 Béluga, 64000 Graham.
+#SBATCH --time=0-02:00:00       # DD-HH:MM:SS
+#SBATCH --array=0-7
 
 # sbatch --dependency=afterok:<prev_job_id> cc_multiple_sweep.sh
 nvidia-smi
@@ -22,13 +22,11 @@ if [ "$SWEEP_MODE" = "unsupervised_adaptation" ]; then
     TTA_ALGOS=(PseudoLabel SHOT)
 
     # 6 find algos
-    # ~max time for heuristics: 6h per res18-PACS, x2 for other dataset or larger backbone
-    FIND_ALGOS=(DomainGen                   None
-                Autorgn
-                Png                         Pngmultismooth
-                UpdateMask_init:pngmulti)
+    # ~max time for heuristics: 2-3h per res18-PACS, x2 for other dataset or larger backbone
+    FIND_ALGOS=(Least_nbox:1_bin:1_trust:low_sz:20_mthr:0.75_sthr:0.75
+                Least_nbox:n_bin:1_trust:low_sz:20_mthr:0.75_sthr:0.75)
     FIX_ALGOS=(Difflr)
-    GRANULARITIES=(Block)
+    GRANULARITIES=(Layer)
 
     # FIND_ALGOS=(Best Bestmulti)
     # FIX_ALGOS=(Trainsubset)
@@ -138,8 +136,8 @@ CMD_LAUNCH=multi_gpu
 
 HOME_PATH=/home/saby
 DATA_DIR=${HOME_PATH}/scratch/data
-OUT_PATH=${HOME_PATH}/scratch/out/stta/sweep
-CODE_PATH=${HOME_PATH}/scratch/code/ttdg
+OUT_PATH=${HOME_PATH}/scratch/out/estta/sweep
+CODE_PATH=${HOME_PATH}/scratch/code/es-tta/benchmarks/T3A
 ENVS_PATH=${HOME_PATH}/envs/ttdg
 
 # -----------------------------------------------------------------------------------
@@ -200,7 +198,8 @@ echo "envs path: ${ENVS_PATH}"
 echo "__________________________]"
 
 # Prepare virtualenv
-module load python/3.8
+module load StdEnv/2020
+module load python/3.8.10
 source ${ENVS_PATH}/bin/activate
 echo "__________________________["
 echo "Environment activated."

@@ -40,7 +40,7 @@ TTA_ALGOS='SHOT'
 # TTA_ALGOS='SimCLR_T3A_TTA'
 
 # FIND_ALGOS=""
-FIND_ALGOS="None"
+FIND_ALGOS="Least"
 # FIND_ALGOS="Best"
 # FIND_ALGOS="Bestmulti"
 # FIND_ALGOS="DomainGen"
@@ -55,7 +55,7 @@ FIND_ALGOS="None"
 # FIND_ALGOS="PostUpdate_PrevX_TotalLoss"
 
 # FIX_ALGOS=""
-FIX_ALGOS="None"
+FIX_ALGOS="Difflr"
 # FIX_ALGOS="Trainsubset"
 # FIX_ALGOS="Difflr"
 
@@ -79,8 +79,8 @@ N_TRIALS_FROM=10
 N_TRIALS=1
 HOME_PATH=/home/saby
 DATA_DIR=${HOME_PATH}/scratch/data
-OUT_PATH=${HOME_PATH}/scratch/out/stta/sweep
-CODE_PATH=${HOME_PATH}/scratch/code/ttdg
+OUT_PATH=${HOME_PATH}/scratch/out/estta/sweep
+CODE_PATH=${HOME_PATH}/scratch/code/es-tta/benchmarks/T3A
 ENVS_PATH=${HOME_PATH}/envs/ttdg
 N_TRIALS_FROM=$((N_TRIALS_FROM + MARK))
 
@@ -111,7 +111,8 @@ echo "envs path: ${ENVS_PATH}"
 echo "__________________________]"
 
 # Prepare virtualenv
-module load python/3.8
+module load StdEnv/2020
+module load python/3.8.10
 source ${ENVS_PATH}/bin/activate
 echo "__________________________["
 echo "Environment activated."

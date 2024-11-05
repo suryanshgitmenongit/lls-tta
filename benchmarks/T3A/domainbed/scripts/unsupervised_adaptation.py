@@ -573,7 +573,7 @@ if __name__ == "__main__":
     parser.add_argument('--fix_algo', type=str, default="None")
     parser.add_argument('--granularity', type=str, default="None")
     parser.add_argument('--data_dir', type=str, default="")
-    parser.add_argument('--best_hp', type=str, default='True')
+    parser.add_argument('--best_hp', type=str, default='Man')
     parser.add_argument('--wandb_name', type=str, default=None)
     parser.add_argument('--track_tta', type=str, default="False")
     parser.add_argument('--ckpt_freq', type=int, default=10000)
