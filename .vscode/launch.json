@@ -96,6 +96,7 @@
 
                 // "--cfg", "cfgs/cifar10/sar.yaml",
                 // "--cfg", "cfgs/cifar10/sar_all.yaml",
+                // "--cfg", "cfgs/cifar10/sar_least.yaml",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
@@ -125,7 +126,8 @@
                 // "--cfg", "cfgs/cifar100/shot_least.yaml",
 
                 // "--cfg", "cfgs/cifar100/sar.yaml",
-                // "--cfg", "cfgs/cifar10/sar_all.yaml",
+                // "--cfg", "cfgs/cifar100/sar_all.yaml",
+                // "--cfg", "cfgs/cifar100/sar_least.yaml",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"

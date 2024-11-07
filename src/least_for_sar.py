@@ -7,7 +7,7 @@ import random
 from least import *
 
 
-def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_names):
+def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_names, **kwargs):
 
     ### Step 1: Prepare everything
     # Get the td variant
@@ -17,6 +17,11 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     # Get all the block names
     granularity = td_variant['lvl']
     box_names = get_all_param_name_list(model, granularity)
+    # to enable training on specific trainable layers
+    # if trainable_layer_names is not None:
+    #     box_names = remove_duplicates([box_name for box_name in box_names \
+    #                                         for trainable_layer_name in trainable_layer_names \
+    #                                             if box_name in trainable_layer_name])
 
     # Copy all the current model parameters and gradients
     all_curr_params_dict, all_curr_grads_dict = {}, {}
@@ -49,8 +54,16 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
                     before_params_dict[box_name].append(params.data.clone())
 
     # Temporary optimizer step for the model
-    temp_optimizer = type(base_optimizer)(temp_params_list, **base_opt_params)
-    temp_optimizer.step()
+    temp_optimizer_type = type(base_optimizer.base_optimizer)
+    temp_optimizer = type(base_optimizer)(temp_params_list, temp_optimizer_type, **base_opt_params)
+
+    x = kwargs['x']
+    margin = kwargs['margin']
+    ema = kwargs['ema']
+    filter_ids_1 = kwargs['filter_ids_1']
+    optimizer_step_fn = kwargs['optimizer_fn']
+    optimizer_step_fn(x, model, temp_optimizer, margin, ema, filter_ids_1)
+    # temp_optimizer.step()
 
     # Get the after-TTA parameter dict (by cloning): TODO: automate this
     after_params_dict = {}
@@ -96,3 +109,41 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     info['mask_dict'] = mask_dict
 
     return mask_values, info
+
+
+def diff_lr_optimizer(base_optimizer):
+    base_opt_params = base_optimizer.defaults
+    base_lr = base_opt_params['lr']
+
+    params = []
+    for group in base_optimizer.param_groups:
+        for p in group['params']:
+            if p.grad is None:
+                continue
+            params.append({'params': p, 'lr': base_lr})
+
+    optimizer_type = type(base_optimizer.base_optimizer)
+    new_optimizer = type(base_optimizer)(params, optimizer_type, **base_opt_params)
+    return new_optimizer
+
+
+def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_names=None, track_flag=False, **kwargs):
+    info = {}
+    new_opt_flag = False
+
+    if trainable_layer_names is not None:
+        trainable_layer_names = [get_clean_layer_name(name) for name in trainable_layer_names]
+    
+    if 'least' in mask_algo.lower():
+        mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names, **kwargs)
+        new_opt_flag = True
+
+    if new_opt_flag:
+        if len(optimizer.param_groups) == 1:
+            optimizer = diff_lr_optimizer(optimizer)
+        diff_lr(optimizer, mask_values)
+
+    if track_flag:
+        return optimizer, info
+    else:
+        return optimizer

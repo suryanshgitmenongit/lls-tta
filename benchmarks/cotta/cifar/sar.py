@@ -10,6 +10,9 @@ import torch.nn as nn
 import torch.jit
 import math
 import numpy as np
+import sys
+sys.path.append('../../../src')
+import least_for_sar
 
 
 def update_ema(ema, new_data):
@@ -31,6 +34,9 @@ class SAR(nn.Module):
         self.steps = steps
         assert steps > 0, "SAR requires >= 1 step(s) to forward and update"
         self.episodic = episodic
+        self.mask_algo = mask_algo
+        self.iter_idx = 0
+        # self.trainable_names = get_trainable_names(model)
 
         self.margin_e0 = margin_e0  # margin E_0 for reliable entropy minimization, Eqn. (2)
         self.reset_constant_em = reset_constant_em  # threshold e_m for model recovery scheme
@@ -69,6 +75,19 @@ class SAR(nn.Module):
         loss = entropys.mean(0)
         loss.backward()
 
+        # Call LEAST to modify optimizer and trainable layers
+        kwargs = {
+            'x': x,
+            'margin': margin,
+            'ema': ema,
+            'filter_ids_1': filter_ids_1,
+            'optimizer_fn': optimizer_step_for_sar
+        }
+        optimizer = least_for_sar.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx,
+                                            # trainable_layer_names=self.trainable_names,
+                                            **kwargs)
+        self.iter_idx += 1
+
         # call sar-specific optimizer step
         ema = optimizer_step_for_sar(x, model, optimizer, margin, ema, filter_ids_1)
 
@@ -87,6 +106,12 @@ class SAR(nn.Module):
         load_model_and_optimizer(self.model, self.optimizer,
                                  self.model_state, self.optimizer_state)
         self.ema = None
+        self.iter_idx = 0
+
+
+def get_trainable_names(model):
+    """Returns a list of trainable parameter names"""
+    return [name for name, p in model.named_parameters() if p.requires_grad]
 
 
 @torch.jit.script
