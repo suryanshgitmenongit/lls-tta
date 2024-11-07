@@ -13,6 +13,8 @@ import norm
 import cotta
 import pseudolabel
 import shot
+import sar
+from sam import SAM
 
 from conf import cfg, load_cfg_fom_args
 
@@ -43,6 +45,9 @@ def evaluate(description):
     if cfg.MODEL.ADAPTATION == "pseudolabel":
         logger.info("test-time adaptation: Pseudolabel")
         model = setup_pseudolabel(base_model)
+    if cfg.MODEL.ADAPTATION == "sar":
+        logger.info("test-time adaptation: SAR")
+        model = setup_sar(base_model)
     # evaluate on each severity and type of corruption in turn
     prev_ct = "x0"
     running_mean = 0
@@ -171,6 +176,26 @@ def setup_shot(model):
     return shot_model
 
 
+def setup_sar(model):
+    """Set up tent adaptation.
+
+    Configure the model for training + feature modulation by batch statistics,
+    collect the parameters for feature modulation by gradient optimization,
+    set up the optimizer, and then tent the model.
+    """
+    model = sar.configure_model(model)
+    params, param_names = sar.collect_params(model)
+    optimizer = setup_optimizer_for_sar(params)
+    sar_model = sar.SAR(model, optimizer,
+                        steps=cfg.OPTIM.STEPS,
+                        episodic=cfg.MODEL.EPISODIC,
+                        mask_algo=cfg.OPTIM.MASK_ALGO)
+    logger.info(f"model for adaptation: %s", model)
+    logger.info(f"params for adaptation: %s", param_names)
+    logger.info(f"optimizer for adaptation: %s", optimizer)
+    return sar_model
+
+
 def setup_optimizer(params):
     """Set up optimizer for tent adaptation.
 
@@ -196,6 +221,33 @@ def setup_optimizer(params):
                    nesterov=cfg.OPTIM.NESTEROV)
     else:
         raise NotImplementedError
+
+
+def setup_optimizer_for_sar(params):
+    """
+    Set up optimizer for SAR adaptation.
+    SAR needs SAM optimizer for adaptation.
+    """
+    if cfg.OPTIM.METHOD == 'Adam':
+        base_optimizer = optim.Adam
+        kwargs = {
+            'lr': cfg.OPTIM.LR,
+            'betas': (cfg.OPTIM.BETA, 0.999),
+            'weight_decay': cfg.OPTIM.WD
+        }
+    elif cfg.OPTIM.METHOD == 'SGD':
+        base_optimizer = optim.SGD
+        kwargs = {
+            'lr': cfg.OPTIM.LR,
+            'momentum': cfg.OPTIM.MOMENTUM,
+            'dampening': cfg.OPTIM.DAMPENING,
+            'weight_decay': cfg.OPTIM.WD,
+            'nesterov': cfg.OPTIM.NESTEROV
+        }
+    else:
+        raise NotImplementedError
+    optimizer = SAM(params, base_optimizer, **kwargs)
+    return optimizer
 
 
 if __name__ == '__main__':

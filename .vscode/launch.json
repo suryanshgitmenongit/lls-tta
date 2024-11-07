@@ -81,7 +81,7 @@
             "request": "launch",
             "program": "cifar10c.py",
             "args": [
-                // "--cfg", "cfgs/cifar10/source.yaml",
+                "--cfg", "cfgs/cifar10/source.yaml",
                 // "--cfg", "cfgs/cifar10/norm.yaml",
                 // "--cfg", "cfgs/cifar10/tent.yaml",
 
@@ -89,10 +89,12 @@
                 // "--cfg", "cfgs/cifar10/cotta_least.yaml",
 
                 // "--cfg", "cfgs/cifar10/pseudolabel.yaml",
-                "--cfg", "cfgs/cifar10/pseudolabel_least.yaml",
+                // "--cfg", "cfgs/cifar10/pseudolabel_least.yaml",
 
                 // "--cfg", "cfgs/cifar10/shot.yaml",
                 // "--cfg", "cfgs/cifar10/shot_least.yaml",
+
+                // "--cfg", "cfgs/cifar10/sar.yaml",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
@@ -108,7 +110,7 @@
             "request": "launch",
             "program": "cifar100c.py",            
             "args": [
-                // "--cfg", "cfgs/cifar100/source.yaml",
+                "--cfg", "cfgs/cifar100/source.yaml",
                 // "--cfg", "cfgs/cifar100/norm.yaml",
                 // "--cfg", "cfgs/cifar100/tent.yaml",
 
@@ -116,10 +118,12 @@
                 // "--cfg", "cfgs/cifar100/cotta_least.yaml",
 
                 // "--cfg", "cfgs/cifar100/pseudolabel.yaml",
-                "--cfg", "cfgs/cifar100/pseudolabel_least.yaml",
+                // "--cfg", "cfgs/cifar100/pseudolabel_least.yaml",
 
                 // "--cfg", "cfgs/cifar100/shot.yaml",
                 // "--cfg", "cfgs/cifar100/shot_least.yaml",
+
+                // "--cfg", "cfgs/cifar100/sar.yaml",
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
