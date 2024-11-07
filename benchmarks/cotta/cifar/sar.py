@@ -46,12 +46,40 @@ class SAR(nn.Module):
             self.reset()
 
         for _ in range(self.steps):
-            outputs, ema, reset_flag = forward_and_adapt_sar(x, self.model, self.optimizer, self.margin_e0, self.reset_constant_em, self.ema)
+            outputs, ema, reset_flag = self.forward_and_adapt_sar(x, self.model, self.optimizer, self.margin_e0, self.reset_constant_em, self.ema)
             if reset_flag:
                 self.reset()
             self.ema = ema  # update moving average value of loss
 
         return outputs
+    
+    @torch.enable_grad()  # ensure grads in possible no grad context for testing
+    def forward_and_adapt_sar(self, x, model, optimizer, margin, reset_constant, ema):
+        """Forward and adapt model input data.
+        Measure entropy of the model prediction, take gradients, and update params.
+        """
+        optimizer.zero_grad()
+        # forward
+        outputs = model(x)
+        # adapt
+        # filtering reliable samples/gradients for further adaptation; first time forward
+        entropys = softmax_entropy(outputs)
+        filter_ids_1 = torch.where(entropys < margin)
+        entropys = entropys[filter_ids_1]
+        loss = entropys.mean(0)
+        loss.backward()
+
+        # call sar-specific optimizer step
+        ema = optimizer_step_for_sar(x, model, optimizer, margin, ema, filter_ids_1)
+
+        # perform model recovery
+        reset_flag = False
+        if ema is not None:
+            if ema < 0.2:
+                print("ema < 0.2, now reset the model")
+                reset_flag = True
+
+        return outputs, ema, reset_flag
 
     def reset(self):
         if self.model_state is None or self.optimizer_state is None:
@@ -68,21 +96,10 @@ def softmax_entropy(x: torch.Tensor) -> torch.Tensor:
 
 
 @torch.enable_grad()  # ensure grads in possible no grad context for testing
-def forward_and_adapt_sar(x, model, optimizer, margin, reset_constant, ema):
-    """Forward and adapt model input data.
-    Measure entropy of the model prediction, take gradients, and update params.
+def optimizer_step_for_sar(x, model, optimizer, margin, ema, filter_ids_1):
     """
-    optimizer.zero_grad()
-    # forward
-    outputs = model(x)
-    # adapt
-    # filtering reliable samples/gradients for further adaptation; first time forward
-    entropys = softmax_entropy(outputs)
-    filter_ids_1 = torch.where(entropys < margin)
-    entropys = entropys[filter_ids_1]
-    loss = entropys.mean(0)
-    loss.backward()
-
+    Closure for SAR optimization.
+    """
     optimizer.first_step(zero_grad=True) # compute \hat{\epsilon(\Theta)} for first order approximation, Eqn. (4)
     entropys2 = softmax_entropy(model(x))
     entropys2 = entropys2[filter_ids_1]  # second time forward  
@@ -96,14 +113,7 @@ def forward_and_adapt_sar(x, model, optimizer, margin, reset_constant, ema):
     loss_second.backward()
     optimizer.second_step(zero_grad=True)
 
-    # perform model recovery
-    reset_flag = False
-    if ema is not None:
-        if ema < 0.2:
-            print("ema < 0.2, now reset the model")
-            reset_flag = True
-
-    return outputs, ema, reset_flag
+    return ema
 
 
 def collect_params(model):
