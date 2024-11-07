@@ -995,17 +995,26 @@ if __name__ == "__main__":
         if args.track_tta.lower() != 'true':
             name, loader, weights = train_loader
             print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-            start_time = time.time()
-            # acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
-            #TODO: temporary fix to get noise values, remove this
-            acc, ent, p_noise_list, fp_noise_list = accuracy_ent_noise(adapted_algorithm, loader, weights, device, adapt=True)
-            adapt_time = time.time() - start_time
-            results[name+'_time'] = adapt_time
+            # Clear the GPU cache
+            # torch.cuda.empty_cache()
+            # Reset the peak memory statistics
+            # torch.cuda.reset_max_memory_allocated(device)
 
-            results[name+'_pnoise'] = np.mean(p_noise_list)
-            results[name+'_fpnoise'] = np.mean(fp_noise_list)
-            noise_df = pd.DataFrame({'p_noise': p_noise_list, 'fp_noise': fp_noise_list})
-            noise_df.to_csv(os.path.join(args.output_dir, 'noise_{}_{}.csv'.format(alg_name, loc_alg_name)), index=False)
+            # start_time = time.time()
+            acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+            #TODO: temporary fix to get noise values, remove this
+            # acc, ent, p_noise_list, fp_noise_list = accuracy_ent_noise(adapted_algorithm, loader, weights, device, adapt=True)
+            # adapt_time = time.time() - start_time
+            # Measure the peak memory usage
+            # peak_memory = torch.cuda.max_memory_allocated(device) / (1024 ** 3) # Convert to GB
+
+            # results[name+'_time'] = adapt_time
+            # results[name+'_peak_memory'] = peak_memory
+
+            # results[name+'_pnoise'] = np.mean(p_noise_list)
+            # results[name+'_fpnoise'] = np.mean(fp_noise_list)
+            # noise_df = pd.DataFrame({'p_noise': p_noise_list, 'fp_noise': fp_noise_list})
+            # noise_df.to_csv(os.path.join(args.output_dir, 'noise_{}_{}.csv'.format(alg_name, loc_alg_name)), index=False)
         else:
             oodtr_evals = train_loader
             oodte_evals, iidte_evals = [], []
