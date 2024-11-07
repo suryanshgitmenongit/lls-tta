@@ -185,8 +185,14 @@ def setup_sar(model):
     collect the parameters for feature modulation by gradient optimization,
     set up the optimizer, and then tent the model.
     """
-    model = sar.configure_model(model)
-    params, param_names = sar.collect_params(model)
+    if 'none' in cfg.OPTIM.MASK_ALGO.lower():
+        # SAR in default mode
+        model = sar.configure_model(model)
+        params, param_names = shot.collect_params(model)
+    else:
+        # SAR with mask
+        model = sar.configure_model_for_masking(model)
+        params, param_names = sar.collect_params_for_masking(model)
     optimizer = setup_optimizer_for_sar(params)
     sar_model = sar.SAR(model, optimizer,
                         steps=cfg.OPTIM.STEPS,

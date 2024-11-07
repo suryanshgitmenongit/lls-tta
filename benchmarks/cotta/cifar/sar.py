@@ -134,7 +134,26 @@ def collect_params(model):
                 if np in ['weight', 'bias']:  # weight is scale, bias is shift
                     params.append(p)
                     names.append(f"{nm}.{np}")
+                    print(nm, np)
 
+    return params, names
+
+
+def collect_params_for_masking(model):
+    """Collect the affine scale + shift parameters from norm layers.
+    Walk the model's modules and collect all normalization parameters.
+    Return the parameters and their names.
+    Note: other choices of parameterization are possible!
+    """
+    params = []
+    names = []
+    for nm, m in model.named_modules():
+        if True:#isinstance(m, nn.BatchNorm2d): collect all 
+            for np, p in m.named_parameters():
+                if np in ['weight', 'bias'] and p.requires_grad:
+                    params.append(p)
+                    names.append(f"{nm}.{np}")
+                    print(nm, np)
     return params, names
 
 
@@ -167,6 +186,28 @@ def configure_model(model):
             m.running_var = None
         # LayerNorm and GroupNorm for ResNet-GN and Vit-LN models
         if isinstance(m, (nn.LayerNorm, nn.GroupNorm)):
+            m.requires_grad_(True)
+    return model
+
+
+def configure_model_for_masking(model):
+    """Configure model for use with SAR."""
+    # train mode, because SAR optimizes the model to minimize entropy
+    model.train()
+    # disable grad, to (re-)enable only what SAR updates
+    model.requires_grad_(False)
+    # configure norm for SAR updates: enable grad + force batch statisics (this only for BN models)
+    for m in model.modules():
+        if isinstance(m, nn.BatchNorm2d):
+            m.requires_grad_(True)
+            # force use of batch stats in train and eval modes
+            m.track_running_stats = False
+            m.running_mean = None
+            m.running_var = None
+        # LayerNorm and GroupNorm for ResNet-GN and Vit-LN models
+        elif isinstance(m, (nn.LayerNorm, nn.GroupNorm)):
+            m.requires_grad_(True)
+        else:
             m.requires_grad_(True)
     return model
 
