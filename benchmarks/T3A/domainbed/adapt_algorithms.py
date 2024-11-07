@@ -5,13 +5,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.autograd as autograd
 
+import math
 import copy
 import numpy as np
 import sys
 sys.path.append('../../../src')
 import least
+import least_for_sar
 
 from domainbed.algorithms import Algorithm
+from domainbed.sam import SAM
 
 
 ALGORITHMS = [
@@ -23,7 +26,8 @@ ALGORITHMS = [
     'PseudoLabel', 
     'PLClf', 
     'SHOT', 
-    'SHOTIM'
+    'SHOTIM',
+    'SAR'
 ]
 
 
@@ -531,3 +535,140 @@ class SHOTIM(SHOT):
         ent_loss += torch.sum(msoftmax * torch.log(msoftmax + 1e-5))
 
         return ent_loss
+
+
+def update_ema(ema, new_data):
+    if ema is None:
+        return new_data
+    else:
+        with torch.no_grad():
+            return 0.9 * ema + (1 - 0.9) * new_data
+
+
+@torch.enable_grad()  # ensure grads in possible no grad context for testing
+def optimizer_step_for_sar(x, model, optimizer, margin, ema, filter_ids_1):
+    """
+    Closure for SAR optimization.
+    """
+    optimizer.first_step(zero_grad=True) # compute \hat{\epsilon(\Theta)} for first order approximation, Eqn. (4)
+    entropys2 = softmax_entropy(model(x))
+    entropys2 = entropys2[filter_ids_1]  # second time forward  
+    loss_second_value = entropys2.clone().detach().mean(0)
+    filter_ids_2 = torch.where(entropys2 < margin)  # here filtering reliable samples again, since model weights have been changed to \Theta+\hat{\epsilon(\Theta)}
+    loss_second = entropys2[filter_ids_2].mean(0)
+    if not np.isnan(loss_second.item()):
+        ema = update_ema(ema, loss_second.item())  # record moving average loss values for model recovery
+
+    # second time backward, update model weights using gradients at \Theta+\hat{\epsilon(\Theta)}
+    loss_second.backward()
+    optimizer.second_step(zero_grad=True)
+
+    return ema
+
+
+class SAR(Algorithm):
+    def __init__(self, input_shape, num_classes, num_domains, hparams, algorithm):
+        """
+        Hparams
+        -------
+        alpha (float) : learning rate coefficient
+        beta (float) : threshold
+        gamma (int) : number of updates
+        """
+        super().__init__(input_shape, num_classes, num_domains, hparams)
+        self.model, self.optimizer = self.configure_model_optimizer(algorithm, alpha=hparams['alpha'])
+        self.steps = hparams['gamma']
+        assert self.steps > 0, "tent requires >= 1 step(s) to forward and update"
+        self.episodic = False
+        self.mask_algo = hparams['find_algo'] + '_lvl:' + hparams['granularity']
+        self.iter_idx = 0
+
+        self.margin_e0 = 0.4*math.log(1000)  # margin E_0 for reliable entropy minimization, Eqn. (2)
+        self.reset_constant_em = 0.2  # threshold e_m for model recovery scheme
+        self.ema = None  # to record the moving average of model output entropy, as model recovery criteria
+    
+        # note: if the model is never reset, like for continual adaptation,
+        # then skipping the state copy would save memory
+        self.model_state, self.optimizer_state = \
+            copy_model_and_optimizer(self.model, self.optimizer)
+
+    def forward(self, x, adapt=False, **kwargs):
+        if adapt:
+            if self.episodic:
+                self.reset()
+
+            for _ in range(self.steps):
+                outputs, ema, reset_flag = self.forward_and_adapt_sar(x, self.model, self.optimizer, self.margin_e0, self.reset_constant_em, self.ema)
+                if reset_flag:
+                    self.reset()
+                self.ema = ema  # update moving average value of loss
+        else:
+            outputs = self.model(x)
+        return outputs
+
+    @torch.enable_grad()  # ensure grads in possible no grad context for testing
+    def forward_and_adapt_sar(self, x, model, optimizer, margin, reset_constant, ema):
+        """Forward and adapt model input data.
+        Measure entropy of the model prediction, take gradients, and update params.
+        """
+        optimizer.zero_grad()
+        # forward
+        outputs = model(x)
+        # adapt
+        # filtering reliable samples/gradients for further adaptation; first time forward
+        entropys = softmax_entropy(outputs)
+        filter_ids_1 = torch.where(entropys < margin)
+        entropys = entropys[filter_ids_1]
+        loss = entropys.mean(0)
+        loss.backward()
+
+        # Call LEAST to modify optimizer and trainable layers
+        kwargs = {
+            'x': x,
+            'margin': margin,
+            'ema': ema,
+            'filter_ids_1': filter_ids_1,
+            'optimizer_fn': optimizer_step_for_sar
+        }
+        optimizer = least_for_sar.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx,
+                                            trainable_layer_names=self.trainable_names,
+                                            **kwargs)
+        self.iter_idx += 1
+
+        # call sar-specific optimizer step
+        ema = optimizer_step_for_sar(x, model, optimizer, margin, ema, filter_ids_1)
+
+        # perform model recovery
+        reset_flag = False
+        if ema is not None:
+            if ema < 0.2:
+                print("ema < 0.2, now reset the model")
+                reset_flag = True
+
+        return outputs, ema, reset_flag
+
+    def configure_model_optimizer(self, algorithm, alpha):
+        adapted_algorithm = copy.deepcopy(algorithm)
+        self.trainable_names = get_trainable_names(adapted_algorithm)
+        base_optimizer = torch.optim.Adam
+        kwargs = {
+            'lr': algorithm.hparams["lr"]  * alpha,
+            'weight_decay': algorithm.hparams['weight_decay']
+        }
+        optimizer = SAM(
+            adapted_algorithm.parameters(),
+            base_optimizer,
+            **kwargs
+        )
+        return adapted_algorithm, optimizer
+
+    def predict(self, x, adapt=False):
+        return self(x, adapt)
+
+    def reset(self):
+        if self.model_state is None or self.optimizer_state is None:
+            raise Exception("cannot reset without saved model/optimizer state")
+        load_model_and_optimizer(self.model, self.optimizer,
+                                 self.model_state, self.optimizer_state)
+        self.ema = None
+        self.iter_idx = 0

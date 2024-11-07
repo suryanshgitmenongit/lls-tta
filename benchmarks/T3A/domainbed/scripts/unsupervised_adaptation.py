@@ -882,6 +882,11 @@ if __name__ == "__main__":
             'beta': [0.9], 
             'theta': [0.1], 
         }
+    elif args.adapt_algorithm in ['SAR']:
+        adapt_hparams_dict = {
+            'alpha': [0.1, 1.0, 10.0],
+            'gamma': [1, 3],
+        }
     else:
         raise Exception("Not Implemented Error")
     if 'domaingen' in args.find_algo.lower():
