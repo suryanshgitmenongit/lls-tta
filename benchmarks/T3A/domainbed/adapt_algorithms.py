@@ -1,3 +1,11 @@
+#  Added support for learnable layer selection (LLS) by passing input tensor 'x' as a parameter in three different places (around lines 165, 360, and 504)
+#  Changed code formatting to improve readability by breaking long lines into multiple lines
+#  Modified the SAR implementation (around line 625-662) with the following changes:
+#  Added **kwargs parameter to forward_and_adapt_sar function
+#  Renamed kwargs to kwargs_with_x for clarity
+#  Added support for merging additional kwargs with the existing parameters
+#  Modified the least_for_sar.get_new_optimizer call to use the updated kwargs_with_x
+
 # The code is modified from domainbed.algorithms
 
 import torch
@@ -165,12 +173,16 @@ class TentFull(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
+        # Pass input tensor 'x' to support learnable layer selection (LLS)
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
-                                                      track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                      trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, x=x, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                trainable_layer_names=self.trainable_names,
+                                                x=x, **kwargs)  # Added x parameter for LLS
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -360,12 +372,16 @@ class PseudoLabel(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
+        # Pass input tensor 'x' to support learnable layer selection (LLS)
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
-                                                      track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                      trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, x=x, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                trainable_layer_names=self.trainable_names,
+                                                x=x, **kwargs)  # Added x parameter for LLS
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -376,6 +392,7 @@ class PseudoLabel(Algorithm):
         loss = F.cross_entropy(outputs[flag], y_prime[flag])
         return loss
 
+    # Original configure_model_optimizer method
     def configure_model_optimizer(self, algorithm, alpha):
         adapted_algorithm = copy.deepcopy(algorithm)
         self.trainable_names = get_trainable_names(adapted_algorithm)
@@ -385,6 +402,32 @@ class PseudoLabel(Algorithm):
             weight_decay=algorithm.hparams['weight_decay']
         )
         return adapted_algorithm, optimizer
+    
+    # Alternate version of configure_model_optimizer
+    # def configure_model_optimizer(self, algorithm, alpha):
+    #     adapted_algorithm = copy.deepcopy(algorithm)
+    #     
+    #     # Set all parameters to not require gradients first
+    #     for param in adapted_algorithm.parameters():
+    #         param.requires_grad = False
+    #         
+    #     # Then enable gradients only for BatchNorm2d layers
+    #     for module in adapted_algorithm.modules():
+    #         if isinstance(module, nn.BatchNorm2d):
+    #             for param in module.parameters():
+    #                 param.requires_grad = True
+    #                 
+    #     # Get trainable parameter names for tracking
+    #     self.trainable_names = get_trainable_names(adapted_algorithm)
+    #     
+    #     # Create optimizer with only parameters that require gradients
+    #     optimizer = torch.optim.Adam(
+    #         filter(lambda p: p.requires_grad, adapted_algorithm.parameters()),
+    #         lr=algorithm.hparams["lr"] * alpha,
+    #         weight_decay=algorithm.hparams['weight_decay']
+    #     )
+    #     
+    #     return adapted_algorithm, optimizer
 
     def predict(self, x, adapt=False):
         return self(x, adapt)
@@ -477,12 +520,16 @@ class SHOT(Algorithm):
         loss = self.loss(outputs)
         loss.backward()
         # Call LEAST to modify optimizer and trainable layers
+        # Pass input tensor 'x' to support learnable layer selection (LLS)
         if self.hparams['track_tta'].lower() == 'true':
-            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names,
-                                                      track_flag=True, **kwargs)
+            optimizer, info = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                      trainable_layer_names=self.trainable_names,
+                                                      track_flag=True, x=x, **kwargs)
             self.info = info
         else:
-            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, trainable_layer_names=self.trainable_names)
+            optimizer = least.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx, 
+                                                trainable_layer_names=self.trainable_names,
+                                                x=x, **kwargs)  # Added x parameter for LLS
         self.iter_idx += 1
         optimizer.step()
         return outputs
@@ -598,7 +645,7 @@ class SAR(Algorithm):
                 self.reset()
 
             for _ in range(self.steps):
-                outputs, ema, reset_flag = self.forward_and_adapt_sar(x, self.model, self.optimizer, self.margin_e0, self.reset_constant_em, self.ema)
+                outputs, ema, reset_flag = self.forward_and_adapt_sar(x, self.model, self.optimizer, self.margin_e0, self.reset_constant_em, self.ema, **kwargs)
                 if reset_flag:
                     self.reset()
                 self.ema = ema  # update moving average value of loss
@@ -607,7 +654,7 @@ class SAR(Algorithm):
         return outputs
 
     @torch.enable_grad()  # ensure grads in possible no grad context for testing
-    def forward_and_adapt_sar(self, x, model, optimizer, margin, reset_constant, ema):
+    def forward_and_adapt_sar(self, x, model, optimizer, margin, reset_constant, ema, **kwargs):
         """Forward and adapt model input data.
         Measure entropy of the model prediction, take gradients, and update params.
         """
@@ -623,16 +670,18 @@ class SAR(Algorithm):
         loss.backward()
 
         # Call LEAST to modify optimizer and trainable layers
-        kwargs = {
-            'x': x,
+        kwargs_with_x = {
+            'x': x,                    # Added x parameter for LLS
             'margin': margin,
             'ema': ema,
             'filter_ids_1': filter_ids_1,
             'optimizer_fn': optimizer_step_for_sar
         }
+        kwargs_with_x.update(kwargs)  # Add any other kwargs passed to the function
+        
         optimizer = least_for_sar.get_new_optimizer(self.mask_algo, model, optimizer, self.iter_idx,
                                             trainable_layer_names=self.trainable_names,
-                                            **kwargs)
+                                            **kwargs_with_x)
         self.iter_idx += 1
 
         # call sar-specific optimizer step
