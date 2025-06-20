@@ -629,9 +629,18 @@ if __name__ == "__main__":
             'granularity': [args.granularity],
             'track_tta': [args.track_tta],
         }
-    # Get the td variant
+    
+    # Get the td variant - FIXED VERSION to handle LLS
     mask_algo = args.find_algo + '_lvl:' + args.granularity
-    td_variant = least.get_td_variant(mask_algo)
+    
+    # Check if this is an LLS configuration to avoid parsing error
+    if mask_algo.lower().startswith('lls'):
+        # For LLS, we only need the order parameter for data loader setup
+        td_variant = {'order': '0'}  # Default order
+    else:
+        # For LEAST and other methods, parse as usual
+        td_variant = least.get_td_variant(mask_algo)
+    
     if 'least' in args.find_algo.lower():
         # Store td variant as args
         for k, v in td_variant.items():
