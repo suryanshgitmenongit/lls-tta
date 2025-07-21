@@ -27,6 +27,13 @@ from domainbed import command_launchers
 import tqdm
 import shlex
 
+# TDB (Tiny DomainBed) environment mapping for hyperparameter ablation
+TDB_ENVIRONMENTS = {
+    'PACS': [1, 3],              # Cartoon, Sketch
+    'VLCS': [2],                 # SUN09  
+    'TerraIncognita': [0, 1, 2], # L100, L38, L43
+}
+
 def get_args_hash(train_args):
     tmp_train_args = {
         key:value for key, value in train_args.items() \
@@ -270,15 +277,47 @@ def all_test_env_combinations(n):
 def make_args_list(n_trials_from, n_trials, dataset_names, algorithms, n_hparams_from, n_hparams, steps,
     data_dir, task, holdout_fraction, single_test_envs, hparams, wandb_name):
     args_list = []
+    
+    # Check for TDB mode via environment variable
+    tdb_only = os.environ.get('TDB_ONLY', 'False').lower() == 'true'
+    
+    if tdb_only:
+        print("TDB Mode enabled - will only process TDB environments")
+        print(f"TDB environments: {TDB_ENVIRONMENTS}")
+    
     for trial_seed in range(n_trials_from, n_trials_from+n_trials):
         for dataset in dataset_names:
             for algorithm in algorithms:
+                # TDB filtering: skip datasets not in TDB list
+                if tdb_only and dataset not in TDB_ENVIRONMENTS:
+                    print(f"TDB Mode: Skipping {dataset} (not in TDB)")
+                    continue
+                
                 if single_test_envs:
-                    all_test_envs = [
-                        [i] for i in range(datasets.num_environments(dataset))]
+                    if tdb_only and dataset in TDB_ENVIRONMENTS:
+                        all_test_envs = [[i] for i in TDB_ENVIRONMENTS[dataset]]
+                        print(f"TDB Mode: Using environments {TDB_ENVIRONMENTS[dataset]} for {dataset}")
+                    elif tdb_only:
+                        continue  # This should not happen due to check above, but safety
+                    else:
+                        all_test_envs = [
+                            [i] for i in range(datasets.num_environments(dataset))]
                 else:
-                    all_test_envs = all_test_env_combinations(
-                        datasets.num_environments(dataset))
+                    if tdb_only:
+                        # For TDB mode with multiple test envs, use TDB environments
+                        tdb_envs = TDB_ENVIRONMENTS[dataset]
+                        all_test_envs = []
+                        # Single environments
+                        for i in tdb_envs:
+                            all_test_envs.append([i])
+                        # Pairs of environments
+                        for i in range(len(tdb_envs)):
+                            for j in range(i+1, len(tdb_envs)):
+                                all_test_envs.append([tdb_envs[i], tdb_envs[j]])
+                    else:
+                        all_test_envs = all_test_env_combinations(
+                            datasets.num_environments(dataset))
+                        
                 for test_envs in all_test_envs:
                     for hparams_seed in range(n_hparams_from, n_hparams):
                         train_args = {}
@@ -300,6 +339,10 @@ def make_args_list(n_trials_from, n_trials, dataset_names, algorithms, n_hparams
                             test_env_name =  "te" + "".join([str(env) for env in test_envs])
                             train_args['wandb_name'] = test_env_name + "_" + wandb_name
                         args_list.append(train_args)
+    
+    if tdb_only:
+        print(f"TDB Mode: Generated {len(args_list)} jobs total")
+    
     return args_list
 
 def ask_for_confirmation():
