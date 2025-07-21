@@ -1,5 +1,5 @@
 # least.py - Layer selection algorithm for test-time adaptation 
-# Super verbose version, with debug prints for both init:LEAST and init:RGN 
+# Super verbose version, with debug prints 
 import torch
 import torchvision
 import torch.nn as nn
@@ -12,7 +12,7 @@ import datetime
 import os
 
 # Enable/disable debug prints overall
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 def debug_print(message, force=False):
     """Print debug message if DEBUG_MODE is enabled or force is True."""
@@ -662,7 +662,8 @@ def get_lls_variant(mask_algo):
     Returns:
         dict: Dictionary of LLS configuration options
     """
-    print(f"[LLS_FLOW_1] get_lls_variant called with mask_algo: {mask_algo}")
+    # CONSERVATIVE DEBUG: Track input and key parsing result
+    debug_print(f"[LLS_PARSE] Input mask_algo: '{mask_algo}'", force=True)
     
     # Default to gradient masking if not specified
     mtype = False  # Default update method
@@ -671,11 +672,11 @@ def get_lls_variant(mask_algo):
     
     # Create LLS hyperparameters dictionary with default values
     lls_variant = {
-        'init'    : 'rgn',    # mask initialization: curr, prev, rgn, rgnbin, least
+        'init'    : 'least',    # mask initialization: curr, prev, rgn, rgnbin, least
         'finit'   : '0.5',    # first mask init value: 0, 0.5, 1, rand
         'emalr'   : '0.5',    # ema learning rate: 0.3, 0.5, 0.7
         'lr'      : '0.01',   # mask learning rate: 0.1, 0.01, 0.001
-        'steps'   : '1',     # mask training steps: 10, 50, 100, 200
+        'steps'   : '10',     # mask training steps: 10, 50, 100, 200
         'patience': '3',      # early stopping patience: 1, 3, 5, 10
         'loss'    : 'curr',   # mask loss: curr, prev
         'reg'     : 'l1',     # regularization: none, l1, l2
@@ -697,8 +698,10 @@ def get_lls_variant(mask_algo):
                 debug_print(f"WARNING: Invalid LLS hyperparameter: {key}, ignoring")
             else:
                 lls_variant[key] = value  # Update configuration value
+                debug_print(f"[LLS_PARSE] Set {key}={value} (overriding default)", force=True)
     
-    print(f"[LLS_FLOW_2] LLS variant parsed - init: {lls_variant['init']}, steps: {lls_variant['steps']}")
+    # CONSERVATIVE DEBUG: Show final parsed init value
+    debug_print(f"[LLS_PARSE] Final init value: '{lls_variant['init']}'", force=True)
     return lls_variant
 
 
@@ -765,9 +768,9 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
     """
     global _lls_storage  # Use global storage
     
-    print(f"\n[LLS_FLOW_3] ========== LLS ENTRY POINT ==========")
-    print(f"[LLS_FLOW_4] get_lls_masks called - iter_idx: {iter_idx}, mask_algo: {mask_algo}")
-    print(f"[LLS_FLOW_5] Input tensor provided: {x is not None}, kwargs keys: {list(kwargs.keys())}")
+    debug_print(f"========== LLS ENTRY POINT ==========")
+    debug_print(f"get_lls_masks called - iter_idx: {iter_idx}, mask_algo: {mask_algo}")
+    debug_print(f"Input tensor provided: {x is not None}")
     
     try:
         # ====================== INITIALIZATION AND VALIDATION ======================
@@ -805,15 +808,13 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         
         # Debug information for initialization parameter
         init_value = str(lls_variant['init']).strip().lower()
-        print(f"[LLS_FLOW_6] CRITICAL: Initialization method detected = '{init_value}'")
-        print(f"[LLS_FLOW_7] Check if init == 'least': {init_value == 'least'}")
-        print(f"[LLS_FLOW_7b] Check if init in ['rgn', 'rgnbin']: {init_value in ['rgn', 'rgnbin']}")
-        print(f"[LLS_FLOW_7c] Check if init == 'prev': {init_value == 'prev'}")
+        # CONSERVATIVE DEBUG: Show which init branch will be taken
+        debug_print(f"[LLS_INIT] Will use initialization: '{init_value}'", force=True)
 
         # Get granularity and box names
         granularity = lls_variant['lvl']  # Get granularity level
         box_names = get_all_param_name_list(model, granularity)
-        print(f"[LLS_FLOW_8] Using {len(box_names)} boxes at {granularity} granularity")
+        debug_print(f"Using {len(box_names)} boxes at {granularity} granularity")
         
         # ====================== PARAMETER MAPPING ======================
         
@@ -838,17 +839,18 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         # Normalize initialization value for consistent comparison
         init_value = str(lls_variant['init']).strip().lower()
         
-        print(f"[LLS_FLOW_9] EXECUTING INITIALIZATION BRANCH: '{init_value}'")
+        debug_print(f"EXECUTING INITIALIZATION BRANCH: '{init_value}'")
         
         if init_value == 'least':  # LEAST initialization
-            print(f"[LLS_FLOW_10] *** LEAST INITIALIZATION BRANCH ENTERED ***")
+            # CONSERVATIVE DEBUG: Confirm LEAST branch execution
+            debug_print(f"[LLS_INIT] *** LEAST INITIALIZATION EXECUTING ***", force=True)
             
             # Call LEAST directly to get its metrics
-            print(f"[LLS_FLOW_11] About to call get_LEAST_masks with mask_algo='LEAST'")
+            debug_print(f"About to call get_LEAST_masks with mask_algo='LEAST'")
             try:
                 _, least_info = get_LEAST_masks("LEAST", model, base_optimizer, iter_idx, 
                                               trainable_layer_names, track_flag=True, x=x, **kwargs)
-                print(f"[LLS_FLOW_12] *** LEAST CALL SUCCESSFUL *** - returned keys: {list(least_info.keys())}")
+                debug_print(f"*** LEAST CALL SUCCESSFUL *** - returned keys: {list(least_info.keys())}")
                 
                 # Validate LEAST return values
                 if 'metric_values_dict' not in least_info:
@@ -858,8 +860,8 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                 
                 # Extract the raw metrics (not the processed masks)
                 box_metrics = least_info['metric_values_dict']
-                print(f"[LLS_FLOW_13] *** LEAST METRICS EXTRACTED ***")
-                print(f"[LLS_FLOW_14] LEAST metrics summary: {[(k, f'{v.item():.4f}') for k, v in box_metrics.items()]}")
+                debug_print(f"*** LEAST METRICS EXTRACTED ***")
+                debug_print(f"LEAST metrics summary: {[(k, f'{v.item():.4f}') for k, v in box_metrics.items()]}")
                 
                 # Create mask parameters from LEAST's metrics
                 init_mask = nn.ParameterList()
@@ -870,16 +872,16 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                         value = max(0.0, min(1.0, value))
                         # Create parameter on correct device
                         init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
-                        print(f"[LLS_FLOW_15] Initialized mask for {box_name}: {value:.4f} (from LEAST)")
+                        debug_print(f"Initialized mask for {box_name}: {value:.4f} (from LEAST)")
                     else:
-                        print(f"[LLS_FLOW_16] WARNING: No LEAST metric for box {box_name}, using default")
+                        debug_print(f"WARNING: No LEAST metric for box {box_name}, using default")
                         value = 0.5  # Default value
                         box_metrics[box_name] = torch.tensor(value)  # Store default value
                         # Create parameter with default value
                         init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
                 
-                print(f"[LLS_FLOW_17] *** MASK INITIALIZATION FROM LEAST COMPLETE ***")
-                print(f"[LLS_FLOW_18] Created {len(init_mask)} mask parameters from LEAST metrics")
+                debug_print(f"*** MASK INITIALIZATION FROM LEAST COMPLETE ***")
+                debug_print(f"Created {len(init_mask)} mask parameters from LEAST metrics")
                 
             except Exception as e:
                 error_msg = f"ERROR in LEAST initialization: {str(e)}"
@@ -888,14 +890,14 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                 raise ValueError(error_msg)
         
         elif init_value in ['rgn', 'rgnbin']:  # RGN initialization
-            print(f"[LLS_FLOW_19] *** RGN INITIALIZATION BRANCH ENTERED ***")
-            print(f"[LLS_FLOW_19a] RGN type: {'binary' if init_value == 'rgnbin' else 'continuous'}")
+            # CONSERVATIVE DEBUG: Confirm RGN branch execution
+            debug_print(f"[LLS_INIT] *** RGN INITIALIZATION EXECUTING *** (type: {init_value})", force=True)
             
             # Ensure we have gradients
-            print(f"[LLS_FLOW_19b] Computing gradients for RGN calculation...")
+            debug_print(f"Computing gradients for RGN calculation...")
             outputs = model(x)  # Forward pass
             loss = tta_loss(outputs)  # Compute adaptation loss
-            print(f"[LLS_FLOW_19c] Initial loss for RGN: {loss.item():.6f}")
+            debug_print(f"Initial loss for RGN: {loss.item():.6f}")
             base_optimizer.zero_grad()  # Clear any existing gradients
             loss.backward()  # Backward pass to get gradients
             
@@ -905,7 +907,7 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
             for box_idx in range(len(box_names)):
                 box_rgn[box_idx] = []
             
-            print(f"[LLS_FLOW_19d] Calculating RGN for each parameter...")
+            debug_print(f"Calculating RGN for each parameter...")
             # Calculate RGN for each parameter
             param_rgn_details = []  # For detailed logging
             for name, param in model.named_parameters():
@@ -922,17 +924,17 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                         param_rgn_details.append((name, grad_norm, param_norm, rgn.item()))
             
             # Log sample of RGN calculations
-            print(f"[LLS_FLOW_19e] Sample RGN calculations (first 5):")
+            debug_print(f"Sample RGN calculations (first 5):")
             for i, (name, gn, pn, rgn) in enumerate(param_rgn_details[:5]):
-                print(f"  {name}: grad_norm={gn:.6f}, param_norm={pn:.6f}, rgn={rgn:.6f}")
+                debug_print(f"  {name}: grad_norm={gn:.6f}, param_norm={pn:.6f}, rgn={rgn:.6f}")
             if len(param_rgn_details) > 5:
-                print(f"  ... and {len(param_rgn_details)-5} more parameters")
+                debug_print(f"  ... and {len(param_rgn_details)-5} more parameters")
             
             # Compute average RGN for each box
             init_mask = nn.ParameterList()  # List to store mask parameters
             box_metrics = {}  # Dictionary to store metric values
             
-            print(f"[LLS_FLOW_19f] Computing average RGN per box...")
+            debug_print(f"Computing average RGN per box...")
             # Process each box
             for box_idx in range(len(box_names)):
                 if box_idx in box_rgn and len(box_rgn[box_idx]) > 0:  # If box has RGN values
@@ -941,65 +943,67 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                     avg_rgn = sum(rgn_list) / len(rgn_list)
                     value = torch.tensor(avg_rgn, device=device)
                     box_metrics[box_names[box_idx]] = avg_rgn  # Store metric
-                    print(f"[LLS_FLOW_19g] Box {box_idx} ({box_names[box_idx]}): avg_rgn={avg_rgn:.6f} from {len(rgn_list)} parameters")
+                    debug_print(f"Box {box_idx} ({box_names[box_idx]}): avg_rgn={avg_rgn:.6f} from {len(rgn_list)} parameters")
                 else:  # No RGN values for this box
                     # Use default value
                     value = torch.tensor(0.5, device=device)
                     box_metrics[box_names[box_idx]] = 0.5  # Store default metric
-                    print(f"[LLS_FLOW_19h] Box {box_idx} ({box_names[box_idx]}): default=0.5 (no valid parameters)")
+                    debug_print(f"Box {box_idx} ({box_names[box_idx]}): default=0.5 (no valid parameters)")
                 
                 # Create parameter on correct device
                 init_mask.append(nn.Parameter(value.view(1), requires_grad=True))
             
             # Normalize the masks
-            print(f"[LLS_FLOW_19i] Normalizing RGN masks...")
+            debug_print(f"Normalizing RGN masks...")
             mask_values = [m.item() for m in init_mask]  # Get all mask values
-            print(f"[LLS_FLOW_19j] Pre-normalization mask values: {[f'{v:.6f}' for v in mask_values[:5]]}")
+            debug_print(f"Pre-normalization mask values: {[f'{v:.6f}' for v in mask_values[:5]]}")
             if any(v > 0 for v in mask_values):  # If any mask is positive
                 max_value = max(mask_values)  # Get maximum value
                 if max_value > 0:  # If maximum is positive
-                    print(f"[LLS_FLOW_19k] Max RGN value: {max_value:.6f}, normalizing...")
+                    debug_print(f"Max RGN value: {max_value:.6f}, normalizing...")
                     # Normalize all masks by maximum value
                     for i, m in enumerate(init_mask):
                         old_val = m.item()
                         init_mask[i].data = m.data / max_value
-                        print(f"[LLS_FLOW_19l] Normalized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.6f}")
+                        debug_print(f"Normalized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.6f}")
                         
             # Binarize if requested
             if init_value == 'rgnbin':  # If binarization requested
-                print(f"[LLS_FLOW_19m] Binarizing RGN masks with threshold 0.5...")
+                debug_print(f"Binarizing RGN masks with threshold 0.5...")
                 for i, m in enumerate(init_mask):
                     old_val = m.item()
                     # Convert to binary (0 or 1) based on threshold 0.5
                     init_mask[i].data = (m.data > 0.5).float()
-                    print(f"[LLS_FLOW_19n] Binarized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.1f}")
+                    debug_print(f"Binarized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.1f}")
             
-            print(f"[LLS_FLOW_19o] *** RGN INITIALIZATION COMPLETE ***")
-            print(f"[LLS_FLOW_19p] RGN metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
+            debug_print(f"*** RGN INITIALIZATION COMPLETE ***")
+            debug_print(f"RGN metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
         
         elif init_value == 'prev' and 'prev_mask' in storage:  # Previous mask initialization
-            print(f"[LLS_FLOW_40] *** PREVIOUS MASK INITIALIZATION BRANCH ENTERED ***")
+            # CONSERVATIVE DEBUG: Confirm PREV branch execution
+            debug_print(f"[LLS_INIT] *** PREV INITIALIZATION EXECUTING ***", force=True)
             # Use previous iteration's masks
             init_mask = copy.deepcopy(storage['prev_mask'])  # Copy previous masks
             # Create metrics dictionary
             box_metrics = {box_names[i]: m.item() for i, m in enumerate(init_mask)}
-            print(f"[LLS_FLOW_41] Loaded {len(init_mask)} masks from previous iteration")
-            print(f"[LLS_FLOW_42] Previous mask values: {[(box_names[i], f'{m.item():.4f}') for i, m in enumerate(init_mask)]}")
+            debug_print(f"Loaded {len(init_mask)} masks from previous iteration")
+            debug_print(f"Previous mask values: {[(box_names[i], f'{m.item():.4f}') for i, m in enumerate(init_mask)]}")
             
             # Add new masks for any new boxes
             if len(init_mask) < len(box_names):  # If we have more boxes now
-                print(f"[LLS_FLOW_43] Adding masks for {len(box_names) - len(init_mask)} new boxes")
+                debug_print(f"Adding masks for {len(box_names) - len(init_mask)} new boxes")
                 # Add default masks for new boxes
                 for i in range(len(init_mask), len(box_names)):
                     # Create parameter with default value 0.5
                     init_mask.append(nn.Parameter(torch.tensor([0.5], device=device), requires_grad=True))
                     box_metrics[box_names[i]] = 0.5  # Store default metric
-                    print(f"[LLS_FLOW_44] Added new mask for box {i} ({box_names[i]}): 0.5 (default)")
-            print(f"[LLS_FLOW_45] *** PREVIOUS MASK INITIALIZATION COMPLETE ***")
+                    debug_print(f"Added new mask for box {i} ({box_names[i]}): 0.5 (default)")
+            debug_print(f"*** PREVIOUS MASK INITIALIZATION COMPLETE ***")
         
         else:  # Default initialization
-            print(f"[LLS_FLOW_50] *** DEFAULT INITIALIZATION BRANCH ENTERED ***")
-            print(f"[LLS_FLOW_51] finit value: '{lls_variant['finit']}'")
+            # CONSERVATIVE DEBUG: Confirm DEFAULT branch execution
+            debug_print(f"[LLS_INIT] *** DEFAULT INITIALIZATION EXECUTING *** (finit: {lls_variant['finit']})", force=True)
+            
             # Use default or specified initialization value
             init_mask = nn.ParameterList()  # List to store mask parameters
             box_metrics = {}  # Dictionary to store metric values
@@ -1007,16 +1011,16 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
             # Get initialization value
             if is_numeric(lls_variant['finit']):  # If numeric value specified
                 init_value_num = float(lls_variant['finit'])  # Convert to float
-                print(f"[LLS_FLOW_52] Using constant initialization value: {init_value_num}")
+                debug_print(f"Using constant initialization value: {init_value_num}")
             elif lls_variant['finit'] == 'rand':  # If random initialization requested
                 init_value_num = None  # Flag for random values
-                print(f"[LLS_FLOW_53] Using random initialization")
+                debug_print(f"Using random initialization")
             else:  # Invalid value
                 init_value_num = 0.5  # Use default value
-                print(f"[LLS_FLOW_54] Invalid finit value, using default: 0.5")
+                debug_print(f"Invalid finit value, using default: 0.5")
             
             # Create masks for each box
-            print(f"[LLS_FLOW_55] Creating initial masks for {len(box_names)} boxes...")
+            debug_print(f"Creating initial masks for {len(box_names)} boxes...")
             for i, box_name in enumerate(box_names):
                 if init_value_num is None:  # Random initialization
                     # Generate random value between 0 and 1
@@ -1024,21 +1028,21 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                     # Create parameter with random value
                     init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
                     box_metrics[box_name] = value  # Store metric
-                    print(f"[LLS_FLOW_56] Initial mask for {box_name}: {value:.6f} (random)")
+                    debug_print(f"Initial mask for {box_name}: {value:.6f} (random)")
                 else:  # Constant initialization
                     # Create parameter with constant value
                     init_mask.append(nn.Parameter(torch.tensor([init_value_num], device=device), requires_grad=True))
                     box_metrics[box_name] = init_value_num  # Store metric
-                    print(f"[LLS_FLOW_57] Initial mask for {box_name}: {init_value_num:.6f} (constant)")
+                    debug_print(f"Initial mask for {box_name}: {init_value_num:.6f} (constant)")
             
-            print(f"[LLS_FLOW_58] *** DEFAULT INITIALIZATION COMPLETE ***")
-            print(f"[LLS_FLOW_59] Default init metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
+            debug_print(f"*** DEFAULT INITIALIZATION COMPLETE ***")
+            debug_print(f"Default init metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
         
         # Print initial mask values for verification
-        print(f"[LLS_FLOW_20] *** INITIAL MASK VALUES SUMMARY ***")
+        debug_print(f"*** INITIAL MASK VALUES SUMMARY ***")
         for i, mask in enumerate(init_mask):
             if i < len(box_names):
-                print(f"[LLS_FLOW_21] {box_names[i]}: {mask.item():.6f}")
+                debug_print(f"{box_names[i]}: {mask.item():.6f}")
         
         # ====================== MODEL PREPARATION ======================
         
@@ -1089,7 +1093,7 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         # ====================== MASK OPTIMIZATION ======================
         
         # Make a copy for tracking best masks
-        print(f"[LLS_FLOW_22] *** STARTING MASK OPTIMIZATION ***")
+        debug_print(f"*** STARTING MASK OPTIMIZATION ***")
         best_mask = copy.deepcopy(init_mask)  # Copy initial masks
         best_loss = float('inf')  # Initialize with infinity
         
@@ -1104,7 +1108,7 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         
         # Optimization loop
         max_steps = int(lls_variant['steps'])  # Convert to integer
-        print(f"[LLS_FLOW_23] Starting optimization with {max_steps} steps (patience={patience})")
+        debug_print(f"Starting optimization with {max_steps} steps (patience={patience})")
         
         for step in range(max_steps):  # Loop through optimization steps
             # Current mask being optimized
@@ -1222,12 +1226,12 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                 
                 # Only print for key steps to avoid flood
                 if step == 0 or step % 10 == 0 or step == max_steps - 1:
-                    print(f"[LLS_FLOW_24] Step {step}: New best loss {best_loss:.6f}")
+                    debug_print(f"Step {step}: New best loss {best_loss:.6f}")
             else:  # If loss didn't improve
                 patience_counter -= 1  # Decrement patience counter
                 
                 if patience_counter <= 0:  # If patience exhausted
-                    print(f"[LLS_FLOW_25] Early stopping at step {step} with best loss {best_loss:.6f}")
+                    debug_print(f"Early stopping at step {step} with best loss {best_loss:.6f}")
                     break  # Stop optimization
             
             # Update masks for next iteration
@@ -1247,7 +1251,7 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
             
             # Zero out all except maximum
             if max_idx >= 0:  # If valid max found
-                print(f"[LLS_FLOW_26] Single box mode: keeping only box {max_idx} ({box_names[max_idx]}) = {max_value:.6f}")
+                debug_print(f"Single box mode: keeping only box {max_idx} ({box_names[max_idx]}) = {max_value:.6f}")
                 for i, param in enumerate(best_mask):
                     if i != max_idx:  # If not the max box
                         best_mask[i].data = torch.tensor([0.0], device=device)  # Zero out
@@ -1255,7 +1259,7 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         # Binarize masks if specified
         if lls_variant['bin'] == '1':  # Binarization mode
             threshold = float(lls_variant['mthr']) if 'mthr' in lls_variant else 0.5  # Get threshold
-            print(f"[LLS_FLOW_27] Binarizing masks with threshold {threshold}")
+            debug_print(f"Binarizing masks with threshold {threshold}")
             for i, param in enumerate(best_mask):
                 # Convert to binary (0 or 1) based on threshold
                 binary_value = 1.0 if param.item() >= threshold else 0.0
@@ -1329,13 +1333,13 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
             'init_metrics': box_metrics,
         }
         
-        print(f"[LLS_FLOW_28] *** LLS OPTIMIZATION COMPLETE ***")
-        print(f"[LLS_FLOW_29] Final best loss: {best_loss:.6f}")
-        print(f"[LLS_FLOW_30] Final mask summary:")
+        debug_print(f"*** LLS OPTIMIZATION COMPLETE ***")
+        debug_print(f"Final best loss: {best_loss:.6f}")
+        debug_print(f"Final mask summary:")
         for i, box_name in enumerate(box_names):
             if i < len(final_mask):
-                print(f"[LLS_FLOW_31] {box_name}: {final_mask[i].item():.6f}")
-        print(f"[LLS_FLOW_32] ========== LLS EXIT POINT ==========\n")
+                debug_print(f"{box_name}: {final_mask[i].item():.6f}")
+        debug_print(f"========== LLS EXIT POINT ==========")
         
         return lr_values, info
         
@@ -1763,9 +1767,9 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
         info: (optional) Dictionary with diagnostic information
     """
     
-    print(f"\n[MAIN_FLOW_1] ========== GET_NEW_OPTIMIZER ENTRY ==========")
-    print(f"[MAIN_FLOW_2] mask_algo: {mask_algo}, iter_idx: {iter_idx}")
-    print(f"[MAIN_FLOW_3] track_flag: {track_flag}, kwargs keys: {list(kwargs.keys())}")
+    debug_print("========== GET_NEW_OPTIMIZER ENTRY ==========")
+    debug_print(f"mask_algo: {mask_algo}, iter_idx: {iter_idx}")
+    debug_print(f"track_flag: {track_flag}")
     
     try:
         info = {}  # Dictionary for tracking info
@@ -1776,40 +1780,45 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
             trainable_layer_names = [get_clean_layer_name(name) for name in trainable_layer_names]
         
         # Choose layer selection method based on mask_algo
-        if 'least' in mask_algo.lower():  # LEAST method
-            print(f"[MAIN_FLOW_4] Using LEAST layer selection")
-            mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names, track_flag=True, **kwargs)
-            new_opt_flag = True
-        elif 'lls' in mask_algo.lower():  # LLS method
-            print(f"[MAIN_FLOW_5] *** LLS METHOD DETECTED ***")
+        # IMPORTANT: Check LLS first with startswith to avoid substring matching issues
+        if mask_algo.lower().startswith('lls'):  # LLS method - CHECK FIRST
+            # CONSERVATIVE DEBUG: Confirm LLS method detection and parameter passing
+            debug_print(f"[METHOD] *** LLS METHOD DETECTED *** mask_algo='{mask_algo}'", force=True)
             # Check for required input tensor
             if 'x' not in kwargs:
                 error_msg = "Input tensor 'x' is required for LLS but not provided"
                 print(error_msg)
                 raise ValueError(error_msg)
-            print(f"[MAIN_FLOW_6] Input tensor confirmed, calling get_lls_masks...")
+            debug_print("Input tensor confirmed, calling get_lls_masks...")
             # Get LLS masks
-            mask_values, info = get_lls_masks(mask_algo, model, optimizer, iter_idx, trainable_layer_names, **kwargs)
+            mask_values, info = get_lls_masks(mask_algo, model, optimizer, iter_idx, 
+                                              trainable_layer_names, **kwargs)
             new_opt_flag = True
-            print(f"[MAIN_FLOW_7] LLS call returned, new_opt_flag: {new_opt_flag}")
+            debug_print("LLS call returned successfully")
+        elif mask_algo.lower().startswith('least'):  # LEAST method - CHECK SECOND
+            debug_print("Using LEAST layer selection")
+            mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, 
+                                                trainable_layer_names, track_flag=True, **kwargs)
+            new_opt_flag = True
         elif 'layer' in mask_algo.lower() or 'stage' in mask_algo.lower():  # Explicit layer selection
-            print(f"[MAIN_FLOW_8] Using explicit layer selection")
+            debug_print("Using explicit layer selection")
             mask_values = get_box_masks(mask_algo, model, trainable_layer_names)
             new_opt_flag = True
         elif 'valid' in mask_algo.lower():  # Validation-based selection
-            print(f"[MAIN_FLOW_9] Using validation-based layer selection")
-            mask_values, info = get_valid_mask(mask_algo, model, optimizer, iter_idx, trainable_layer_names, **kwargs)
+            debug_print("Using validation-based layer selection")
+            mask_values, info = get_valid_mask(mask_algo, model, optimizer, iter_idx, 
+                                               trainable_layer_names, **kwargs)
             new_opt_flag = True
         elif 'autorgn' in mask_algo.lower():  # Automatic RGN-based selection
-            print(f"[MAIN_FLOW_10] Using automatic RGN-based layer selection")
+            debug_print("Using automatic RGN-based layer selection")
             mask_values = get_auto_rgn_values(optimizer.param_groups)
             new_opt_flag = True
         elif 'autosnr' in mask_algo.lower():  # Automatic SNR-based selection
-            print(f"[MAIN_FLOW_11] Using automatic SNR-based layer selection")
+            debug_print("Using automatic SNR-based layer selection")
             mask_values = get_auto_snr_values(optimizer.param_groups)
             new_opt_flag = True
         else:
-            print(f"[MAIN_FLOW_12] No layer selection method identified in: {mask_algo}")
+            debug_print(f"No layer selection method identified in: {mask_algo}")
             if track_flag:
                 return optimizer, info
             else:
@@ -1817,7 +1826,7 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
 
         # Apply layer-specific learning rates if needed
         if new_opt_flag:
-            print(f"[MAIN_FLOW_13] Applying layer-specific learning rates...")
+            debug_print("Applying layer-specific learning rates...")
             # Create per-parameter optimizer if needed
             if len(optimizer.param_groups) == 1:
                 optimizer = diff_lr_optimizer(optimizer)
@@ -1829,16 +1838,16 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
             if len(optimizer.param_groups) > 0:
                 sample_size = min(3, len(optimizer.param_groups))
                 lr_sample = [f"{g['lr']:.6f}" for g in optimizer.param_groups[:sample_size]]
-                print(f"[MAIN_FLOW_14] Sample learning rates: {lr_sample} (total: {len(optimizer.param_groups)} groups)")
+                debug_print(f"Sample learning rates: {lr_sample} (total: {len(optimizer.param_groups)} groups)")
 
         # Return optimizer and info based on track_flag
-        print(f"[MAIN_FLOW_15] ========== GET_NEW_OPTIMIZER EXIT ==========\n")
+        debug_print("========== GET_NEW_OPTIMIZER EXIT ==========")
         if track_flag:
             return optimizer, info
         else:
             return optimizer
             
     except Exception as e:
-        print(f"[MAIN_ERROR] CRITICAL ERROR in get_new_optimizer: {str(e)}")
+        print(f"[ERROR] CRITICAL ERROR in get_new_optimizer: {str(e)}")
         print(traceback.format_exc())
         raise
