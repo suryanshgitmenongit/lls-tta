@@ -1,19 +1,28 @@
 #!/bin/bash
-#SBATCH --gres=gpu:1            # Request GPU "generic resources"
+#SBATCH --gres=gpu:4            # Request GPU "generic resources"
 #SBATCH --cpus-per-task=8      # Refer to cluster's documentation for the right CPU/GPU ratio
-#SBATCH --mem=32000M            # Memory proportional to GPUs: 32000 Cedar, 47000 Béluga, 64000 Graham.
-#SBATCH --time=0-02:00:00       # DD-HH:MM:SS
-#SBATCH --array=0-7
+#SBATCH --mem=128000M            # Memory proportional to GPUs: 32000 Cedar, 47000 Béluga, 64000 Graham.
+#SBATCH --time=0-12:00:00       # DD-HH:MM:SS (# hours for proper coverage)
+#SBATCH --array=0-7          # 8 jobs
+#SBATCH --output=/home/saby/scratch/Suryansh/out/estta/sweep/benchmarking/fdb/run1/slurm-%A_%a.out
+#SBATCH --error=/home/saby/scratch/Suryansh/out/estta/sweep/benchmarking/fdb/run1/slurm-%A_%a.err
 
 # sbatch --dependency=afterok:<prev_job_id> cc_multiple_sweep.sh
 nvidia-smi
+# -----------------------------------------------------------------------------------
+# TDB MODE CONFIGURATION
+# -----------------------------------------------------------------------------------
+# Set to 'true' for Tiny DomainBed mode (faster experiments with subset of environments)
+# Set to 'false' for full experiments
+TDB_MODE=false  # Change this to 'true' to enable TDB mode
+
 # -----------------------------------------------------------------------------------
 # Define run parameters as bash arrays
 # -----------------------------------------------------------------------------------
 # SWEEP_MODE=launch
 SWEEP_MODE=unsupervised_adaptation
 
-DATASETS=(PACS VLCS)
+DATASETS=(PACS VLCS TerraIncognita OfficeHome)
 BACKBONES=(resnet18-BN)
 DG_ALGOS=(ERM)
 MARKS=(0)
@@ -21,10 +30,8 @@ MARKS=(0)
 if [ "$SWEEP_MODE" = "unsupervised_adaptation" ]; then
     TTA_ALGOS=(PseudoLabel SHOT)
 
-    # 6 find algos
-    # ~max time for heuristics: 2-3h per res18-PACS, x2 for other dataset or larger backbone
-    FIND_ALGOS=(Least_nbox:1_bin:1_trust:low_sz:20_mthr:0.75_sthr:0.75
-                Least_nbox:n_bin:1_trust:low_sz:20_mthr:0.75_sthr:0.75)
+    # First run: update, lr, and ema configurations
+    FIND_ALGOS=(LLS_init:least_reg:none)
     FIX_ALGOS=(Difflr)
     GRANULARITIES=(Layer)
 
@@ -129,20 +136,21 @@ fi
 N_TRIALS_FROM=$((N_TRIALS_FROM + MARK))
 
 # -----------------------------------------------------------------------------------
-# Set sweep folder names and paths
+# Set sweep folder names and paths - UPDATED FOR YOUR SETUP
 # -----------------------------------------------------------------------------------
 SWEEP_NAME=${DATASET}_${BACKBONE}_${DG_ALGO}_${MARK}
 CMD_LAUNCH=multi_gpu
 
 HOME_PATH=/home/saby
-DATA_DIR=${HOME_PATH}/scratch/data
-OUT_PATH=${HOME_PATH}/scratch/out/estta/sweep
-CODE_PATH=${HOME_PATH}/scratch/code/es-tta/benchmarks/T3A
-ENVS_PATH=${HOME_PATH}/envs/ttdg
+DATA_DIR=${HOME_PATH}/scratch/Suryansh/data
+OUT_PATH=${HOME_PATH}/scratch/Suryansh/out/estta/sweep
+CODE_PATH=${HOME_PATH}/scratch/Suryansh/lls-tta-main/benchmarks/T3A
+ENVS_PATH=${HOME_PATH}/scratch/Suryansh/envs/ttdg
 
 # -----------------------------------------------------------------------------------
 # Documentation for parameters above
 # -----------------------------------------------------------------------------------
+# TDB_MODE : true/false - enables Tiny DomainBed mode for faster experiments
 # SWEEP_MODE : delete_incomplete (delete sweep folders),
 #              launch (source training / DG),
 #              unsupervised_adaptation (target adaptation / TTA),
@@ -175,6 +183,7 @@ echo "__________________________["
 echo "run_sweep.sh args received:"
 echo ""
 echo "total jobs should be: ${n_total}"
+echo "TDB mode: ${TDB_MODE}"
 echo "sweep_mode: ${SWEEP_MODE}"
 echo "dataset: ${DATASET}"
 echo "backbone: ${BACKBONE}"
@@ -206,14 +215,19 @@ echo "Environment activated."
 echo "__________________________]"
 
 # Prepare dataset
-TMP_DATA_DIR=${SLURM_TMPDIR}/data/
-mkdir ${TMP_DATA_DIR}
+# FIXED: Create unique temp directory to prevent race conditions between concurrent jobs
+TMP_DATA_DIR=${SLURM_TMPDIR}/data_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}/
+mkdir -p ${TMP_DATA_DIR}
 echo "Copying datasets:"
 cp ${DATA_DIR}/${DATASET}.zip ${TMP_DATA_DIR}
 unzip ${DATA_DIR}/${DATASET}.zip -d ${TMP_DATA_DIR}
 echo "__________________________["
 echo "Dataset prepared."
 echo "__________________________]"
+
+# Set TDB environment variable
+export TDB_ONLY=${TDB_MODE}
+echo "TDB_ONLY environment variable set to: ${TDB_ONLY}"
 
 # Run command
 cd ${CODE_PATH}
@@ -293,5 +307,5 @@ fi
 
 
 echo "__________________________["
-echo "cc_run_sweep.sh finished."
+echo "cc_multiple_sweep.sh finished."
 echo "__________________________]"
