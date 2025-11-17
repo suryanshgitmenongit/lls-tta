@@ -1,5 +1,5 @@
 # least.py - Layer selection algorithm for test-time adaptation 
-# Super verbose version, with debug prints 
+
 import torch
 import torchvision
 import torch.nn as nn
@@ -12,7 +12,7 @@ import datetime
 import os
 
 # Enable/disable debug prints overall
-DEBUG_MODE = False
+DEBUG_MODE = True
 
 def debug_print(message, force=False):
     """Print debug message if DEBUG_MODE is enabled or force is True."""
@@ -22,10 +22,53 @@ def debug_print(message, force=False):
 
 def remove_duplicates(seq):
     """Remove duplicate items from a sequence while preserving order."""
-    seen = set()  # Set to track seen items
-    seen_add = seen.add  # Store method reference for speed
-    # Return only items that haven't been seen before
+    seen = set()
+    seen_add = seen.add
     result = [x for x in seq if not (x in seen or seen_add(x))]
+    debug_print(f"remove_duplicates: input={len(seq)} items, output={len(result)} items (removed {len(seq)-len(result)} duplicates)")
+    return result
+
+
+def ensure_float(value):
+    """Convert tensor or numeric value to plain float.
+    
+    This helper ensures consistent type handling across the codebase for mask values.
+    
+    Args:
+        value: Can be torch.Tensor, Python float, or Python int
+        
+    Returns:
+        float: Plain Python float
+    """
+    debug_print(f"ensure_float: input type={type(value).__name__}, value={value}")
+    if isinstance(value, torch.Tensor):
+        result = float(value.item())
+        debug_print(f"ensure_float: converted tensor to float={result}")
+        return result
+    result = float(value)
+    debug_print(f"ensure_float: converted to float={result}")
+    return result
+
+
+def ensure_tensor(value, device):
+    """Convert float or tensor to tensor on specified device.
+    
+    This helper ensures consistent type handling when mask values need to be tensors.
+    
+    Args:
+        value: Can be torch.Tensor, Python float, or Python int
+        device: Target device for the tensor
+        
+    Returns:
+        torch.Tensor: Tensor on specified device
+    """
+    debug_print(f"ensure_tensor: input type={type(value).__name__}, value={value}, target_device={device}")
+    if isinstance(value, torch.Tensor):
+        result = value.to(device)
+        debug_print(f"ensure_tensor: tensor already exists, moved to {device}, shape={result.shape}")
+        return result
+    result = torch.tensor(value, device=device)
+    debug_print(f"ensure_tensor: created new tensor on {device}, shape={result.shape}, value={result.item()}")
     return result
 
 
@@ -39,91 +82,120 @@ def get_all_param_name_list(algorithm, granularity):
     Returns:
         list: List of parameter group names
     """
-    granularity = granularity.lower()  # Convert to lowercase for consistency
+    debug_print("=" * 60)
+    debug_print(f"get_all_param_name_list ENTRY: granularity='{granularity}'")
     
-    # Get the actual model from the algorithm
+    granularity = granularity.lower()
+    
     model = algorithm
     if hasattr(algorithm, 'featurizer'):
         model = algorithm.featurizer.network
+        debug_print("get_all_param_name_list: extracted model from algorithm.featurizer.network")
     elif hasattr(algorithm, 'network'):
         model = algorithm.network
+        debug_print("get_all_param_name_list: extracted model from algorithm.network")
+    else:
+        debug_print("get_all_param_name_list: using algorithm directly as model")
     
-    # Handle ResNet models
+    total_params = len(list(model.named_parameters()))
+    debug_print(f"get_all_param_name_list: model has {total_params} named parameters")
+    debug_print(f"get_all_param_name_list: model type = {type(model).__name__}")
+    
     if isinstance(model, torchvision.models.ResNet):
-        pre_box_list = []  # Layers before main blocks
-        post_box_list = []  # Layers after main blocks
-        layer_name = 'layer'  # Base name for layers
-        
-        # Set granularity level based on input
-        if granularity == 'block':
-            granularity_level = 1
-        elif granularity == 'subblock':
-            granularity_level = 2
-        elif granularity == 'layer':
-            granularity_level = -1
-        elif granularity == 'model':
-            return [layer_name]  # Return single name for whole model
-        else:
-            error_msg = f'Not implemented for granularity: {granularity}'
-            raise NotImplementedError(error_msg)
-
-    # Handle standard or WRN models (based on parameter count)
-    elif len(list(model.named_parameters())) == 80:  # Standard.pt or WRN model
+        debug_print("get_all_param_name_list: detected ResNet model")
         pre_box_list = []
         post_box_list = []
         layer_name = 'layer'
         
         if granularity == 'block':
             granularity_level = 1
+            debug_print("get_all_param_name_list: using Block granularity (level=1)")
         elif granularity == 'subblock':
-            granularity_level = 3
+            granularity_level = 2
+            debug_print("get_all_param_name_list: using SubBlock granularity (level=2)")
         elif granularity == 'layer':
-            granularity_level = 4
+            granularity_level = -1
+            debug_print("get_all_param_name_list: using Layer granularity (level=-1, all layers)")
         elif granularity == 'model':
+            debug_print("get_all_param_name_list: using Model granularity (single box)")
             return [layer_name]
         else:
             error_msg = f'Not implemented for granularity: {granularity}'
+            debug_print(f"get_all_param_name_list ERROR: {error_msg}", force=True)
+            raise NotImplementedError(error_msg)
+
+    elif len(list(model.named_parameters())) == 80:
+        debug_print("get_all_param_name_list: detected 80-parameter model")
+        pre_box_list = []
+        post_box_list = []
+        layer_name = 'layer'
+        
+        if granularity == 'block':
+            granularity_level = 1
+            debug_print("get_all_param_name_list: using Block granularity (level=1)")
+        elif granularity == 'subblock':
+            granularity_level = 3
+            debug_print("get_all_param_name_list: using SubBlock granularity (level=3)")
+        elif granularity == 'layer':
+            granularity_level = 4
+            debug_print("get_all_param_name_list: using Layer granularity (level=4)")
+        elif granularity == 'model':
+            debug_print("get_all_param_name_list: using Model granularity (single box)")
+            return [layer_name]
+        else:
+            error_msg = f'Not implemented for granularity: {granularity}'
+            debug_print(f"get_all_param_name_list ERROR: {error_msg}", force=True)
             raise NotImplementedError(error_msg)
     
-    # Handle ResNeXt models
-    elif len(list(model.named_parameters())) == 95:  # Hendrycks2020AugMix_ResNeXt.pt
+    elif len(list(model.named_parameters())) == 95:
+        debug_print("get_all_param_name_list: detected 95-parameter model")
         pre_box_list = []
         post_box_list = []
         layer_name = 'stage'
         
         if granularity == 'block':
             granularity_level = 1
+            debug_print("get_all_param_name_list: using Block granularity (level=1)")
         elif granularity == 'subblock':
             granularity_level = 2
+            debug_print("get_all_param_name_list: using SubBlock granularity (level=2)")
         elif granularity == 'layer':
             granularity_level = 3
+            debug_print("get_all_param_name_list: using Layer granularity (level=3)")
         elif granularity == 'model':
+            debug_print("get_all_param_name_list: using Model granularity (single box)")
             return [layer_name]
         else:
             error_msg = f'Not implemented for granularity: {granularity}'
+            debug_print(f"get_all_param_name_list ERROR: {error_msg}", force=True)
             raise NotImplementedError(error_msg)
         
     else:
         error_msg = f'Unrecognized model type with {len(list(model.named_parameters()))} parameters'
+        debug_print(f"get_all_param_name_list ERROR: {error_msg}", force=True)
         raise NotImplementedError(error_msg)
     
-    # Create list of box names based on parameter names
     all_params = list(model.named_parameters())
+    debug_print(f"get_all_param_name_list: processing {len(all_params)} parameters to extract boxes")
     
     all_box_list = []
     for name, _ in all_params:
-        if layer_name in name:  # Only parameters containing layer_name
+        if layer_name in name:
             if granularity_level > 0:
                 parts = name.split(".")
                 if len(parts) >= granularity_level:
-                    all_box_list.append(".".join(parts[:granularity_level]))
+                    box_name = ".".join(parts[:granularity_level])
+                    all_box_list.append(box_name)
             else:
                 all_box_list.append(name)
     
+    debug_print(f"get_all_param_name_list: extracted {len(all_box_list)} box names (before deduplication)")
+    
     all_box_list = remove_duplicates(all_box_list)
     
-    # Return combined list
     result = pre_box_list + all_box_list + post_box_list
+    debug_print(f"get_all_param_name_list RETURN: {len(result)} boxes = {result}")
+    debug_print("=" * 60)
     return result
 
 
@@ -136,8 +208,7 @@ def get_clean_layer_name(layer_name):
     Returns:
         str: Cleaned layer name
     """
-    remove_words = ['featurizer', 'network']  # Words to remove
-    # Join parts of the name that aren't in remove_words
+    remove_words = ['featurizer', 'network']
     clean_name = '.'.join([
         split_name for split_name in layer_name.split('.')
         if split_name not in remove_words
@@ -155,7 +226,7 @@ def is_layer_trainable(name, trainable_layer_names):
     Returns:
         bool: True if layer should be trained, False otherwise
     """
-    if trainable_layer_names is None:  # If no restrictions
+    if trainable_layer_names is None:
         return True
     
     clean_name = get_clean_layer_name(name)
@@ -164,12 +235,12 @@ def is_layer_trainable(name, trainable_layer_names):
 
 
 # Global variables for LEAST
-source_params_dict = {}  # Store source parameters
-window_start_params_dict = {}  # Store window start parameters
-window_index = None  # Current window index
+source_params_dict = {}
+window_start_params_dict = {}
+window_index = None
 
 # Global storage for LLS
-_lls_storage = {}  # Store model-specific state for LLS
+_lls_storage = {}
 
 # Global state for early stopping
 min_loss_dict, steps_no_improve_dict = {}, {}
@@ -185,33 +256,36 @@ def get_td_variant(mask_algo):
     Returns:
         dict: Dictionary of TD configuration options
     """
+    debug_print(f"get_td_variant ENTRY: mask_algo='{mask_algo}'")
     
-    # Create td hparams dictionary with default values
     td_variant = {
-        # Metric design choices
-        'nbox'   : '1',         # number of boxes: 1, n
-        'curr'   : 'next',      # td = <> - anchor: next, prev
-        'bin'    : '1',         # binarize the mask: 0, 1
-        'trust'  : 'low',       # trust on init samples: high, low
-        'lvl'    : 'Layer',     # granularity of the model: Layer, Block, Subblock
-        'type'   : 'best',      # type of mask: best, notbest, worst, random
-        'order'  : '0',         # seed for deciding sample order: 0, 1, 2
-
-        # Metric's hyperparameters
-        'sz'     : '20',        # window size: 5, 20, n
-        'mthr'   : '0.75',      # threshold based on metric range: 0.5, 0.75, 0.99
-        'sthr'   : '0.75',      # if trust == low, no. of sample / window sz threshold: 0.5, 0.75, 0.9
+        'nbox'   : '1',
+        'curr'   : 'next',
+        'bin'    : '1',
+        'trust'  : 'low',
+        'lvl'    : 'Layer',
+        'type'   : 'best',
+        'order'  : '0',
+        'sz'     : '20',
+        'mthr'   : '0.75',
+        'sthr'   : '0.75',
     }
-
-    # Update the td hparams dictionary with the given hyperparameters
-    for hparam in mask_algo.split('_'):  # Split by underscore
-        if ':' in hparam:  # Check if it's a key-value pair
-            key, value = hparam.split(':')  # Split into key and value
-            if key not in td_variant:  # Check if key is valid
-                error_msg = f'Invalid mask_hparam: {key}'
-                raise ValueError(error_msg)
-            td_variant[key] = value.lower()  # Update configuration value
     
+    debug_print(f"get_td_variant: default config = {td_variant}")
+
+    hparam_count = 0
+    for hparam in mask_algo.split('_'):
+        if ':' in hparam:
+            key, value = hparam.split(':')
+            if key not in td_variant:
+                error_msg = f'Invalid mask_hparam: {key}'
+                debug_print(f"get_td_variant ERROR: {error_msg}", force=True)
+                raise ValueError(error_msg)
+            td_variant[key] = value.lower()
+            hparam_count += 1
+            debug_print(f"get_td_variant: parsed {key}={value.lower()}")
+    
+    debug_print(f"get_td_variant RETURN: parsed {hparam_count} hyperparameters, final config = {td_variant}")
     return td_variant
 
 
@@ -227,47 +301,56 @@ def get_anchor_params_dict(before_params_dict, td_variant):
     """
     global source_params_dict, window_start_params_dict, window_index
 
-    iter_idx = td_variant['iter_idx']  # Get current iteration
+    iter_idx = td_variant['iter_idx']
+    debug_print(f"get_anchor_params_dict ENTRY: iter_idx={iter_idx}, window_sz={td_variant['sz']}")
     
-    anchor_params_dict = {}  # Dictionary to store anchor parameters
+    anchor_params_dict = {}
     
-    if iter_idx == 0:  # First iteration
-        # Start of TTA for any target domain
-        # Store the current parameters as source/window start/anchor parameters
+    if iter_idx == 0:
+        debug_print("get_anchor_params_dict: iter_idx=0, initializing global state")
         source_params_dict = copy.deepcopy(before_params_dict)
         anchor_params_dict = copy.deepcopy(before_params_dict)
         window_start_params_dict = copy.deepcopy(before_params_dict)
-        window_index = 0  # Reset window index
+        window_index = 0
+        debug_print(f"get_anchor_params_dict: initialized {len(source_params_dict)} boxes")
 
-    else:  # Not first iteration
-        if td_variant['sz'] == 'n':  # Use whole trajectory
-            # Clone the source parameters to anchor parameters
-            if not source_params_dict:  # Check source params exist
+    else:
+        if td_variant['sz'] == 'n':
+            debug_print("get_anchor_params_dict: using source params (infinite window)")
+            if not source_params_dict:
                 error_msg = 'TD Error: Source parameters are empty'
+                debug_print(f"get_anchor_params_dict ERROR: {error_msg}", force=True)
                 raise ValueError(error_msg)
             anchor_params_dict = copy.deepcopy(source_params_dict)
-            window_index += 1  # Increment window index
+            window_index += 1
+            debug_print(f"get_anchor_params_dict: window_index incremented to {window_index}")
 
-        elif td_variant['sz'].isdigit() and int(td_variant['sz']) > 0:  # Use fixed window size
+        elif td_variant['sz'].isdigit() and int(td_variant['sz']) > 0:
             sz = int(td_variant['sz'])
-            # Reset the window start parameters after every sz iterations
-            if iter_idx % sz == 0:  # Start of new window
-                window_start_params_dict = copy.deepcopy(before_params_dict)
-                window_index = 0  # Reset window index
-            else:
-                window_index += 1  # Increment window index
+            debug_print(f"get_anchor_params_dict: using windowed params (window_sz={sz})")
             
-            # Clone the window start parameters to anchor parameters
-            if not window_start_params_dict:  # Check window start params exist
+            if iter_idx % sz == 0:
+                debug_print(f"get_anchor_params_dict: window boundary reached (iter_idx={iter_idx} % {sz} = 0), resetting window")
+                window_start_params_dict = copy.deepcopy(before_params_dict)
+                window_index = 0
+            else:
+                window_index += 1
+            
+            debug_print(f"get_anchor_params_dict: window_index={window_index}/{sz}")
+            
+            if not window_start_params_dict:
                 error_msg = 'TD Error: Window start parameters are empty'
+                debug_print(f"get_anchor_params_dict ERROR: {error_msg}", force=True)
                 raise ValueError(error_msg)
             anchor_params_dict = copy.deepcopy(window_start_params_dict)
 
-        else:  # Invalid window size
+        else:
             error_msg = f'TD Error: Invalid window size: {td_variant["sz"]}'
+            debug_print(f"get_anchor_params_dict ERROR: {error_msg}", force=True)
             raise ValueError(error_msg)
 
-    return anchor_params_dict  # Return anchor parameters
+    debug_print(f"get_anchor_params_dict RETURN: {len(anchor_params_dict)} boxes, window_index={window_index}")
+    return anchor_params_dict
 
 
 def get_curr_params_dict(before_params_dict, after_params_dict, td_variant):
@@ -281,12 +364,17 @@ def get_curr_params_dict(before_params_dict, after_params_dict, td_variant):
     Returns:
         dict: Current parameters for delta computation
     """
-    if td_variant['curr'] == 'next':  # Use parameters after update
+    debug_print(f"get_curr_params_dict ENTRY: strategy='{td_variant['curr']}'")
+    
+    if td_variant['curr'] == 'next':
+        debug_print("get_curr_params_dict: using after_params (next)")
         return copy.deepcopy(after_params_dict)
-    elif td_variant['curr'] == 'prev':  # Use parameters before update
+    elif td_variant['curr'] == 'prev':
+        debug_print("get_curr_params_dict: using before_params (prev)")
         return copy.deepcopy(before_params_dict)        
-    else:  # Invalid strategy
+    else:
         error_msg = f'TD Error: Get current parameters not implemented for {td_variant["curr"]}'
+        debug_print(f"get_curr_params_dict ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
 
 
@@ -301,13 +389,26 @@ def compute_total_delta_tensor_of_box(curr_params, anchor_params, td_variant):
     Returns:
         torch.Tensor: Parameter delta tensor
     """
-    # Check shape compatibility
-    if curr_params.shape != anchor_params.shape:
-        error_msg = f'TD Error: Shape mismatch for curr ({curr_params.shape}) and anchor ({anchor_params.shape}) parameters'
+    debug_print(f"compute_total_delta_tensor_of_box: curr_shape={curr_params.shape}, anchor_shape={anchor_params.shape}")
+    
+    # FIX #3: Handle empty tensors explicitly
+    if curr_params.numel() == 0 and anchor_params.numel() == 0:
+        debug_print("compute_total_delta_tensor_of_box: both tensors empty, returning empty delta", force=True)
+        return torch.tensor([], device=curr_params.device)
+    
+    if curr_params.numel() == 0 or anchor_params.numel() == 0:
+        error_msg = f'TD Error: Mismatched empty state (curr={curr_params.numel()}, anchor={anchor_params.numel()})'
+        debug_print(f"compute_total_delta_tensor_of_box ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
     
-    # Compute parameter delta
+    if curr_params.shape != anchor_params.shape:
+        error_msg = f'TD Error: Shape mismatch for curr ({curr_params.shape}) and anchor ({anchor_params.shape}) parameters'
+        debug_print(f"compute_total_delta_tensor_of_box ERROR: {error_msg}", force=True)
+        raise ValueError(error_msg)
+    
     total_delta = curr_params - anchor_params
+    delta_norm = total_delta.norm().item()
+    debug_print(f"compute_total_delta_tensor_of_box: computed delta, norm={delta_norm:.6f}")
     
     return total_delta
 
@@ -323,18 +424,35 @@ def get_total_delta_tensor(anchor_params_dict, curr_params_dict, td_variant):
     Returns:
         dict: Dictionary of parameter delta tensors for each box
     """
-    total_delta_tensor_dict = {}  # Dictionary to store delta tensors
+    debug_print(f"get_total_delta_tensor ENTRY: computing deltas for {len(anchor_params_dict)} boxes")
     
-    # Process each box
+    total_delta_tensor_dict = {}
+    
     for box_name in anchor_params_dict.keys():
-        # Get the flattened current and anchor parameters
-        curr_params = torch.cat([params.flatten() for params in curr_params_dict[box_name]])
-        anchor_params = torch.cat([params.flatten() for params in anchor_params_dict[box_name]])
+        debug_print(f"get_total_delta_tensor: processing box '{box_name}'")
+        
+        # FIX #2: Guard against empty parameter lists
+        curr_parts = [params.flatten() for params in curr_params_dict.get(box_name, [])]
+        anchor_parts = [params.flatten() for params in anchor_params_dict.get(box_name, [])]
+        
+        if len(curr_parts) == 0:
+            debug_print(f"get_total_delta_tensor: box '{box_name}' has no parameters - creating empty tensor", force=True)
+            # Determine device from anchor if available, otherwise use CPU
+            device = torch.device('cpu')
+            if len(anchor_parts) > 0:
+                device = anchor_parts[0].device
+            total_delta_tensor_dict[box_name] = torch.tensor([], device=device)
+            continue
+        
+        curr_params = torch.cat(curr_parts)
+        anchor_params = torch.cat(anchor_parts)
+        
+        debug_print(f"get_total_delta_tensor: box '{box_name}' has {curr_params.numel()} parameters")
 
-        # Compute the total delta for the current box
         total_delta_tensor_dict[box_name] = compute_total_delta_tensor_of_box(
             curr_params, anchor_params, td_variant)
 
+    debug_print(f"get_total_delta_tensor RETURN: computed deltas for {len(total_delta_tensor_dict)} boxes")
     return total_delta_tensor_dict
 
 
@@ -349,14 +467,15 @@ def get_traj_td_tensor_dict(before_params_dict, after_params_dict, td_variant):
     Returns:
         dict: Dictionary of trajectory delta tensors
     """
-    # Get the anchor and current parameters
+    debug_print("get_traj_td_tensor_dict ENTRY: computing trajectory deltas")
+    
     anchor_params_dict = get_anchor_params_dict(before_params_dict, td_variant)
     curr_params_dict = get_curr_params_dict(before_params_dict, after_params_dict, td_variant)
 
-    # Compute the total delta
     total_delta_tensor_dict = get_total_delta_tensor(
         anchor_params_dict, curr_params_dict, td_variant)
     
+    debug_print(f"get_traj_td_tensor_dict RETURN: {len(total_delta_tensor_dict)} trajectory deltas")
     return total_delta_tensor_dict
 
 
@@ -371,14 +490,15 @@ def get_samp_td_tensor_dict(before_params_dict, after_params_dict, td_variant):
     Returns:
         dict: Dictionary of sample delta tensors
     """
-    # Get the anchor and current parameters
+    debug_print("get_samp_td_tensor_dict ENTRY: computing sample deltas")
+    
     anchor_params_dict = copy.deepcopy(before_params_dict)
     curr_params_dict = copy.deepcopy(after_params_dict)
 
-    # Compute the total delta
     total_delta_tensor_dict = get_total_delta_tensor(
         anchor_params_dict, curr_params_dict, td_variant)
     
+    debug_print(f"get_samp_td_tensor_dict RETURN: {len(total_delta_tensor_dict)} sample deltas")
     return total_delta_tensor_dict
 
 
@@ -393,17 +513,28 @@ def compute_metric_values(td_traj_tensor_dict, td_samp_tensor_dict, td_variant):
     Returns:
         dict: Dictionary of alignment metrics for each box
     """
-    metric_values = {}  # Dictionary to store metrics
+    debug_print(f"compute_metric_values ENTRY: computing cosine similarity for {len(td_traj_tensor_dict)} boxes")
     
-    # Process each box
+    metric_values = {}
+    
     for box_name in td_traj_tensor_dict.keys():
-        td_traj_tensor = td_traj_tensor_dict[box_name]  # Trajectory delta
-        td_samp_tensor = td_samp_tensor_dict[box_name]  # Sample delta
+        td_traj_tensor = td_traj_tensor_dict[box_name]
+        td_samp_tensor = td_samp_tensor_dict[box_name]
+        
+        traj_norm = td_traj_tensor.norm().item()
+        samp_norm = td_samp_tensor.norm().item()
+        
+        # FIX #4: CRITICAL - Check for zero norms before cosine similarity
+        if traj_norm < 1e-10 or samp_norm < 1e-10:
+            metric_value = torch.tensor(0.0, device=td_traj_tensor.device)
+            debug_print(f"compute_metric_values: box '{box_name}' has zero norm (traj={traj_norm:.2e}, samp={samp_norm:.2e}), setting metric=0", force=True)
+        else:
+            metric_value = torch.cosine_similarity(td_traj_tensor, td_samp_tensor, dim=0)
+            debug_print(f"compute_metric_values: box '{box_name}' cosine={metric_value.item():.6f} (traj_norm={traj_norm:.6f}, samp_norm={samp_norm:.6f})")
+        
+        metric_values[box_name] = metric_value
 
-        # Compute cosine similarity (alignment) between trajectory and sample deltas
-        metric_value = torch.cosine_similarity(td_traj_tensor, td_samp_tensor, dim=0)
-        metric_values[box_name] = metric_value  # Store metric
-
+    debug_print(f"compute_metric_values RETURN: {len(metric_values)} metric values computed")
     return metric_values
 
 
@@ -416,20 +547,25 @@ def get_mistrust_window_sz(td_variant):
     Returns:
         int: Window size for mistrust calculation
     """
-    if td_variant['sz'] == 'n':  # If window size is 'n' (all samples)
-        # Hardcoding the window size for trust window if not provided
-        # Cannot set extremely large as it will considerably slow down adaptation
-        sz = 50  # Default size
-    else:  # If explicit window size provided
-        sz = int(td_variant['sz'])  # Convert to integer
+    if td_variant['sz'] == 'n':
+        sz = 50
+        debug_print(f"get_mistrust_window_sz: infinite window, using default sz=50")
+    else:
+        sz = int(td_variant['sz'])
+        debug_print(f"get_mistrust_window_sz: using configured sz={sz}")
     
-    sthr = float(td_variant['sthr'])  # Get threshold
-    mistrust_window_sz = int(sz * sthr)  # Calculate result
+    sthr = float(td_variant['sthr'])
+    mistrust_window_sz = int(sz * sthr)
+    debug_print(f"get_mistrust_window_sz RETURN: mistrust_window_sz={mistrust_window_sz} (sz={sz} * sthr={sthr})")
     return mistrust_window_sz
 
 
 def compute_mask(metric_values_dict, td_variant):
     """Compute masks from metric values based on configuration.
+    
+    FIX: Derive device consistently from metric_values_dict at start,
+    rather than using conditional logic with 'cpu' fallback which could cause
+    device mismatches in multi-GPU setups.
     
     Args:
         metric_values_dict: Dictionary of metrics for each box
@@ -438,75 +574,112 @@ def compute_mask(metric_values_dict, td_variant):
     Returns:
         dict: Dictionary of mask values for each box
     """
-    global window_index  # Use global window index
+    global window_index
     
-    # Special mask types
-    type = td_variant['type']  # Get mask type
-    if type == 'worst':  # Use worst boxes
+    debug_print("=" * 50)
+    debug_print(f"compute_mask ENTRY: computing masks for {len(metric_values_dict)} boxes")
+    debug_print(f"compute_mask: config type={td_variant['type']}, nbox={td_variant['nbox']}, bin={td_variant['bin']}, trust={td_variant['trust']}")
+    
+    # FIX #5: Derive device consistently from metric values
+    if len(metric_values_dict) == 0:
+        debug_print("compute_mask ERROR: Empty metric_values_dict", force=True)
+        raise ValueError("compute_mask called with empty metric_values_dict")
+    
+    device = next(iter(metric_values_dict.values())).device
+    debug_print(f"compute_mask: using device={device} (derived from metric values)")
+    
+    type = td_variant['type']
+    if type == 'worst':
+        debug_print("compute_mask: using 'worst' strategy")
         return compute_worst_mask(metric_values_dict, td_variant)
-    if type == 'notbest':  # Use all but best box
+    if type == 'notbest':
+        debug_print("compute_mask: using 'notbest' strategy")
         return compute_not_best_mask(metric_values_dict, td_variant)
-    elif type == 'random':  # Use random box
+    elif type == 'random':
+        debug_print("compute_mask: using 'random' strategy")
         return compute_random_mask(metric_values_dict, td_variant)
 
-    # Standard mask computation
-    # Clone the metric_values_dict to mask_dict
     mask_dict = copy.deepcopy(metric_values_dict)
+    debug_print("compute_mask: starting with raw metric values as initial masks")
 
-    # Mask application: single or multiple boxes
-    nbox = td_variant['nbox']  # Get number of boxes to use
-    if nbox == '1':  # Single box mode
-        # Single box: Store the mask for box with max metric value
-        max_mask_value = max(mask_dict.values())  # Get maximum metric
+    # Step 1: Apply nbox constraint
+    nbox = td_variant['nbox']
+    if nbox == '1':
+        debug_print("compute_mask: applying nbox=1 (keep only best box)")
+        max_mask_value = max(mask_dict.values())
+        debug_print(f"compute_mask: max metric value = {max_mask_value.item():.6f}")
+        
         for box_name, mask_value in mask_dict.items():
-            if mask_value == max_mask_value:  # If this is the best box
-                mask_dict[box_name] = mask_value  # Keep value
-            else:  # Not the best box
-                mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)  # Zero out mask
-    elif nbox == 'n':  # Multiple box mode
-        # Multiple boxes: Do nothing (keep all metrics)
+            if mask_value == max_mask_value:
+                mask_dict[box_name] = mask_value
+                debug_print(f"compute_mask: box '{box_name}' KEPT (value={mask_value.item():.6f})")
+            else:
+                # FIX #5: Use consistent device
+                mask_dict[box_name] = torch.tensor(0.0, device=device)
+                debug_print(f"compute_mask: box '{box_name}' ZEROED (was {mask_value.item():.6f})")
+    elif nbox == 'n':
+        debug_print("compute_mask: nbox='n', keeping all boxes")
         pass
-    else:  # Invalid mode
+    else:
         error_msg = f'TD Error: Invalid number of boxes: {nbox}'
+        debug_print(f"compute_mask ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
 
-    # Mask application per-box: binary (based on mthr), weighted (based on metric values)
-    bin_mask = td_variant['bin']  # Get binarization flag
-    mthr = float(td_variant['mthr'])  # Get threshold
-    if bin_mask == '1':  # Binarize masks
-        # Binarize the mask based on mthr
+    # Step 2: Apply binarization
+    bin_mask = td_variant['bin']
+    mthr = float(td_variant['mthr'])
+    if bin_mask == '1':
+        debug_print(f"compute_mask: applying binarization (threshold={mthr})")
         for box_name, mask_value in mask_dict.items():
-            if mask_value > mthr:  # If above threshold
-                mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)  # Set to 1
-            else:  # Below threshold
-                mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)  # Set to 0
-    elif bin_mask == '0':  # Keep continuous values
-        # Layer-wise mask based on metric values: do nothing
+            original = mask_value.item() if isinstance(mask_value, torch.Tensor) else mask_value
+            if mask_value > mthr:
+                # FIX #5: Use consistent device
+                mask_dict[box_name] = torch.tensor(1.0, device=device)
+                debug_print(f"compute_mask: box '{box_name}' -> 1.0 (was {original:.6f} > {mthr})")
+            else:
+                # FIX #5: Use consistent device
+                mask_dict[box_name] = torch.tensor(0.0, device=device)
+                debug_print(f"compute_mask: box '{box_name}' -> 0.0 (was {original:.6f} <= {mthr})")
+    elif bin_mask == '0':
+        debug_print("compute_mask: binarization disabled, keeping continuous values")
         pass
-    else:  # Invalid option
+    else:
         error_msg = f'TD Error: Invalid binarize mask: {bin_mask}'
+        debug_print(f"compute_mask ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
 
-    # Mask application based on trust on init samples: high, low, no (based on sthr)
-    trust = td_variant['trust']  # Get trust level
-    if trust == 'low':  # Low trust mode
-        # Low trust: Scale the mask based on the number of samples / mistrust window size
+    # Step 3: Apply trust factor
+    trust = td_variant['trust']
+    if trust == 'low':
         mistrust_window_sz = get_mistrust_window_sz(td_variant)
-        if window_index+1 < mistrust_window_sz:  # If still in mistrust window
-            # Calculate trust factor based on window position
+        debug_print(f"compute_mask: applying low trust (mistrust_window={mistrust_window_sz}, current_idx={window_index})")
+        
+        if window_index+1 < mistrust_window_sz:
             mistrust_factor = (window_index+1) / mistrust_window_sz
+            debug_print(f"compute_mask: within mistrust window, applying factor={mistrust_factor:.4f}")
+            
             for box_name, mask_value in mask_dict.items():
-                # Scale mask by mistrust factor
+                original = mask_value.item() if isinstance(mask_value, torch.Tensor) else mask_value
                 mask_dict[box_name] *= mistrust_factor
-    elif trust == 'high':  # High trust mode
-        # High trust: Trust the metric/mask on init samples (do nothing)
+                new_val = mask_dict[box_name].item() if isinstance(mask_dict[box_name], torch.Tensor) else mask_dict[box_name]
+                debug_print(f"compute_mask: box '{box_name}' scaled: {original:.6f} -> {new_val:.6f}")
+        else:
+            debug_print(f"compute_mask: outside mistrust window (idx={window_index+1} >= {mistrust_window_sz}), no scaling")
+    elif trust == 'high':
+        debug_print("compute_mask: high trust mode, no scaling applied")
         pass
-    else:  # Invalid trust mode
+    else:
         error_msg = f'TD Error: Invalid trust on init samples: {trust}'
+        debug_print(f"compute_mask ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
 
+    debug_print("compute_mask RETURN: final mask values:")
+    for box_name, mask_value in mask_dict.items():
+        val = mask_value.item() if isinstance(mask_value, torch.Tensor) else mask_value
+        debug_print(f"  {box_name}: {val:.6f}")
+    debug_print("=" * 50)
+    
     return mask_dict
-
 
 def get_mask_values(trainable_lr_dict, model, trainable_layer_names):
     """Convert mask dictionary to list of mask values for each parameter.
@@ -519,24 +692,40 @@ def get_mask_values(trainable_lr_dict, model, trainable_layer_names):
     Returns:
         list: List of mask values for each parameter
     """
-    lr_values = []  # List to store mask values
+    debug_print(f"get_mask_values ENTRY: converting {len(trainable_lr_dict)} box masks to parameter masks")
     
-    # Process each parameter
+    lr_values = []
+    total_params = 0
+    trainable_params = 0
+    matched_params = 0
+    
     for idx, (name, param) in enumerate(model.named_parameters()):
-        # Check if parameter is trainable
+        total_params += 1
         trainable_layer = is_layer_trainable(name, trainable_layer_names)
+        
         if param.requires_grad and trainable_layer:
-            lr_value = 0  # Default value (no mask)
-            # Find which box this parameter belongs to
+            trainable_params += 1
+            lr_value = 0
+            matched = False
+            
             for dname in trainable_lr_dict.keys():
-                if dname in name:  # If parameter belongs to this box
-                    lr_value = trainable_lr_dict[dname]  # Use box's mask value
+                if dname in name:
+                    lr_value = trainable_lr_dict[dname]
+                    matched = True
+                    matched_params += 1
                     break
-            lr_values.append(float(lr_value))  # Add to list
+            
+            # Use ensure_float helper for consistent type handling
+            lr_values.append(ensure_float(lr_value))
 
-    # Check if any parameter is masked
+    debug_print(f"get_mask_values: processed {total_params} total params, {trainable_params} trainable, {matched_params} matched to boxes")
+    
     if sum(lr_values) <= 0:
         debug_print("WARNING: No trainable parameters found (all masks are zero)", force=True)
+    else:
+        active_count = sum(1 for v in lr_values if v > 0)
+        inactive_count = sum(1 for v in lr_values if v == 0)
+        debug_print(f"get_mask_values RETURN: {len(lr_values)} masks ({active_count} active, {inactive_count} inactive, sum={sum(lr_values):.4f})")
     
     return lr_values
 
@@ -556,95 +745,139 @@ def get_LEAST_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_
     Returns:
         tuple: (mask values, info dictionary)
     """
+    debug_print("=" * 80)
+    debug_print("GET_LEAST_MASKS ENTRY")
+    debug_print(f"  mask_algo: '{mask_algo}'")
+    debug_print(f"  iter_idx: {iter_idx}")
+    debug_print(f"  trainable_layer_names: {trainable_layer_names}")
+    debug_print(f"  track_flag: {track_flag}")
     
     try:
-        ### Step 1: Prepare everything
-        # Get the td variant
-        td_variant = get_td_variant(mask_algo)  # Parse configuration
-        td_variant['iter_idx'] = iter_idx  # Set iteration index
+        td_variant = get_td_variant(mask_algo)
+        td_variant['iter_idx'] = iter_idx
+        debug_print(f"  Parsed TD config: {td_variant}")
         
-        # Get all the block names
-        granularity = td_variant['lvl']  # Get granularity
-        box_names = get_all_param_name_list(model, granularity)  # Get box names
+        granularity = td_variant['lvl']
+        box_names = get_all_param_name_list(model, granularity)
+        debug_print(f"  Found {len(box_names)} boxes at '{granularity}' level")
 
-        # Copy all the current model parameters and gradients
-        all_curr_params_dict, all_curr_grads_dict = {}, {}  # Store current state
+        # Step 1: Save current state
+        debug_print("  STEP 1: Saving current model state")
+        all_curr_params_dict, all_curr_grads_dict = {}, {}
+        params_with_grad = 0
+        params_without_grad = 0
+        
         for name, params in model.named_parameters():
-            all_curr_params_dict[name] = params.data.clone()  # Copy parameter
-            if params.grad is None:  # If no gradient
-                all_curr_grads_dict[name] = None  # Store None
-            else:  # If gradient exists
-                all_curr_grads_dict[name] = params.grad.clone()  # Copy gradient
+            all_curr_params_dict[name] = params.data.clone()
+            if params.grad is None:
+                all_curr_grads_dict[name] = None
+                params_without_grad += 1
+            else:
+                all_curr_grads_dict[name] = params.grad.clone()
+                params_with_grad += 1
         
-        ### Step 2: Simulate the optimizer step for cloned model and optimizer
-        # Get the base optimizer's parameters
-        base_opt_params = copy.deepcopy(base_optimizer.defaults)  # Copy optimizer settings
+        debug_print(f"  Saved state for {len(all_curr_params_dict)} params ({params_with_grad} with grad, {params_without_grad} without)")
         
-        # Get the parameter list for optimizer step (without cloning)
-        # Also, get the before-TTA parameter dict (by cloning)
-        temp_params_list = []  # List to store parameters for temp optimizer
-        before_params_dict = {}  # Dictionary to store parameters before update
+        # Step 2: Simulate optimizer step
+        debug_print("  STEP 2: Simulating optimizer step to measure deltas")
+        base_opt_params = copy.deepcopy(base_optimizer.defaults)
+        debug_print(f"  Base optimizer params: {base_opt_params}")
         
-        # Initialize parameter dictionary for each box
+        temp_params_list = []
+        before_params_dict = {}
+        
         for box_name in box_names:
-            before_params_dict[box_name] = []  # Empty list for each box
+            before_params_dict[box_name] = []
+            box_param_count = 0
             
-            # Loop through model parameters
             for idx, (name, params) in enumerate(model.named_parameters()):
-                # Check if parameter is trainable
                 trainable_layer = is_layer_trainable(name, trainable_layer_names)
                 if params.requires_grad and trainable_layer:
-                    if box_name in name:  # If parameter belongs to this box
-                        temp_params_list.append(params)  # Add to temp parameters
-                        before_params_dict[box_name].append(params.data.clone())  # Store copy
+                    if box_name in name:
+                        temp_params_list.append(params)
+                        before_params_dict[box_name].append(params.data.clone())
+                        box_param_count += 1
+            
+            if box_param_count > 0:
+                debug_print(f"  Box '{box_name}': {box_param_count} parameters")
 
-        # Temporary optimizer step for the model
+        debug_print(f"  Total trainable params for optimizer: {len(temp_params_list)}")
         temp_optimizer = type(base_optimizer)(temp_params_list, **base_opt_params)
-        temp_optimizer.step()  # Perform update step
-
-        # Get the after-TTA parameter dict (by cloning)
-        after_params_dict = {}  # Dictionary to store parameters after update
+        debug_print(f"  Created temporary optimizer: {type(temp_optimizer).__name__}")
         
-        # Initialize parameter dictionary for each box
+        # FIX #1: Guard against missing gradients
+        has_grad = any(p.grad is not None for p in temp_params_list)
+        if not has_grad:
+            debug_print("LEAST ERROR: No gradients on parameters. Call backward() before layer selection.", force=True)
+            raise RuntimeError(
+                "LEAST requires gradients to compute parameter deltas. "
+                "Ensure loss.backward() is called before get_new_optimizer()."
+            )
+        
+        temp_optimizer.step()
+        debug_print("  Executed optimizer step")
+
+        # Step 3: Capture after state
+        debug_print("  STEP 3: Capturing state after optimizer step")
+        after_params_dict = {}
+        
         for box_name in box_names:
-            after_params_dict[box_name] = []  # Empty list for each box
+            after_params_dict[box_name] = []
             
-            # Loop through model parameters
             for idx, (name, params) in enumerate(model.named_parameters()):
-                # Check if parameter is trainable
                 trainable_layer = is_layer_trainable(name, trainable_layer_names)
                 if params.requires_grad and trainable_layer:
-                    if box_name in name:  # If parameter belongs to this box
-                        after_params_dict[box_name].append(params.data.clone())  # Store copy
+                    if box_name in name:
+                        after_params_dict[box_name].append(params.data.clone())
 
-        ### Step 3: Mask computation for each box
-        # Get trajectory TD
+        # Step 4: Compute trajectory deltas
+        debug_print("  STEP 4: Computing trajectory deltas")
         td_traj_tensor_dict = get_traj_td_tensor_dict(before_params_dict, after_params_dict, td_variant)
 
-        # Get sample/batch TD
+        # Step 5: Compute sample deltas
+        debug_print("  STEP 5: Computing sample deltas")
         td_samp_tensor_dict = get_samp_td_tensor_dict(before_params_dict, after_params_dict, td_variant)
         
-        # Compute mask for each box
+        # Step 6: Compute alignment metrics
+        debug_print("  STEP 6: Computing alignment metrics")
         metric_values_dict = compute_metric_values(td_traj_tensor_dict, td_samp_tensor_dict, td_variant)
 
-        ### Step 4: Mask application for each box
+        # Step 7: Compute final masks
+        debug_print("  STEP 7: Computing final masks from metrics")
         mask_dict = compute_mask(metric_values_dict, td_variant)
 
-        ### Step 5: Pack up everything    
-        # Restore all the current model's parameters and grads
-        for name, params in model.named_parameters():
-            params.data = all_curr_params_dict[name]  # Restore parameter
-            params.grad = all_curr_grads_dict[name]  # Restore gradient
+        # FIX #6 + FIX #4: Normalize mask_dict to plain floats using helper
+        debug_print("  Converting mask tensors to plain floats")
+        mask_dict = {k: ensure_float(v) for k, v in mask_dict.items()}
 
-        # Get mask values for each layer
+        # Step 8: Restore original state
+        debug_print("  STEP 8: Restoring original model state")
+        restored_params = 0
+        restored_grads = 0
+        
+        for name, params in model.named_parameters():
+            params.data = all_curr_params_dict[name]
+            restored_params += 1
+            params.grad = all_curr_grads_dict[name]
+            if params.grad is not None:
+                restored_grads += 1
+        
+        debug_print(f"  Restored {restored_params} params and {restored_grads} gradients")
+
+        # Step 9: Convert to parameter-level masks
+        debug_print("  STEP 9: Converting box masks to parameter-level masks")
         mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
 
-        # Log intermediate results
         info = {
             'metric_values_dict': metric_values_dict,
             'mask_dict': mask_dict
         }
 
+        debug_print("GET_LEAST_MASKS RETURN:")
+        debug_print(f"  Returning {len(mask_values)} parameter masks")
+        debug_print(f"  Info dict keys: {list(info.keys())}")
+        debug_print("=" * 80)
+        
         return mask_values, info
         
     except Exception as e:
@@ -662,46 +895,46 @@ def get_lls_variant(mask_algo):
     Returns:
         dict: Dictionary of LLS configuration options
     """
-    # CONSERVATIVE DEBUG: Track input and key parsing result
-    debug_print(f"[LLS_PARSE] Input mask_algo: '{mask_algo}'", force=True)
+    debug_print(f"get_lls_variant ENTRY: mask_algo='{mask_algo}'")
     
-    # Default to gradient masking if not specified
-    mtype = False  # Default update method
-    if 'update' in mask_algo.lower():  # Check if update method is specified
-        mtype = True  # Use model interpolation instead of gradient masking
+    mtype = False
+    if 'update' in mask_algo.lower():
+        mtype = True
+        debug_print("get_lls_variant: detected 'update' keyword, enabling model interpolation mode")
     
-    # Create LLS hyperparameters dictionary with default values
     lls_variant = {
-        'init'    : 'least',    # mask initialization: curr, prev, rgn, rgnbin, least
-        'finit'   : '0.5',    # first mask init value: 0, 0.5, 1, rand
-        'emalr'   : '0.5',    # ema learning rate: 0.3, 0.5, 0.7
-        'lr'      : '0.01',   # mask learning rate: 0.1, 0.01, 0.001
-        'steps'   : '10',     # mask training steps: 10, 50, 100, 200
-        'patience': '3',      # early stopping patience: 1, 3, 5, 10
-        'loss'    : 'curr',   # mask loss: curr, prev
-        'reg'     : 'l1',     # regularization: none, l1, l2
-        'regstr'  : '0.01',   # regularization strength: 1, 0.1, 0.01
-        'bnd'     : 'clip',   # mask bound: none, clip, scale
-        'bin'     : '0',      # binarize masks: 0, 1
-        'appl'    : 'avg',    # mask application: curr, prod, avg, ema
-        'update'  : mtype,    # mask type: update or grad
-        'lvl'     : 'Layer',  # granularity: Layer, Block, Subblock
-        'nbox'    : '1',      # number of boxes: 1, n (from LEAST)
-        'mthr'    : '0.75',   # threshold based on metric range: 0.5, 0.75, 0.99 (from LEAST)
+        'init'    : 'least',
+        'finit'   : '0.5',
+        'emalr'   : '0.5',
+        'lr'      : '0.01',
+        'steps'   : '10',
+        'patience': '3',
+        'loss'    : 'curr',
+        'reg'     : 'l1',
+        'regstr'  : '0.01',
+        'bnd'     : 'clip',
+        'bin'     : '0',
+        'appl'    : 'avg',
+        'update'  : mtype,
+        'lvl'     : 'Layer',
+        'nbox'    : '1',
+        'mthr'    : '0.75',
     }
     
-    # Parse configuration string
-    for hparam in mask_algo.split('_'):  # Split by underscore
-        if ':' in hparam:  # Check if it's a key-value pair
-            key, value = hparam.split(':')  # Split into key and value
-            if key not in lls_variant:  # Check if key is valid
+    debug_print(f"get_lls_variant: default config = {lls_variant}")
+    
+    hparam_count = 0
+    for hparam in mask_algo.split('_'):
+        if ':' in hparam:
+            key, value = hparam.split(':')
+            if key not in lls_variant:
                 debug_print(f"WARNING: Invalid LLS hyperparameter: {key}, ignoring")
             else:
-                lls_variant[key] = value  # Update configuration value
-                debug_print(f"[LLS_PARSE] Set {key}={value} (overriding default)", force=True)
+                lls_variant[key] = value
+                hparam_count += 1
+                debug_print(f"get_lls_variant: parsed {key}={value}")
     
-    # CONSERVATIVE DEBUG: Show final parsed init value
-    debug_print(f"[LLS_PARSE] Final init value: '{lls_variant['init']}'", force=True)
+    debug_print(f"get_lls_variant RETURN: parsed {hparam_count} hyperparameters, final config = {lls_variant}")
     return lls_variant
 
 
@@ -714,8 +947,9 @@ def tta_loss(outputs):
     Returns:
         torch.Tensor: Mean entropy loss
     """
-    # Compute entropy of softmax distribution
-    loss = softmax_entropy(outputs).mean(0)
+    # FIX #5: Use .mean() for clarity (functionally identical to .mean(0) for 1D)
+    loss = softmax_entropy(outputs).mean()
+    debug_print(f"tta_loss: computed entropy loss = {loss.item():.6f} from outputs shape {outputs.shape}")
     return loss
 
 
@@ -734,17 +968,86 @@ def is_numeric(string):
     Returns:
         bool: True if string is numeric, False otherwise
     """
-    if string is None:  # Handle None case
+    if string is None:
         return False
     try:
-        # Try to iterate through characters
         for char in string:
-            # Check if each character is a digit or decimal point
             if not (char.isdigit() or char == '.'):
                 return False
-        return True  # All characters were valid
-    except:  # Any exception means it's not numeric
+        return True
+    except:
         return False
+
+
+def set_parameter(current_module, name, parameters):
+    """Set a parameter in a module, handling nested names.
+    
+    IMPORTANT ARCHITECTURAL NOTE:
+    This function assigns plain Tensors (not nn.Parameter) to _parameters dict.
+    This is intentionally non-standard to preserve gradient flow to mask variables
+    during LLS optimization. Standard approach would wrap in nn.Parameter(), but that
+    creates a leaf node and severs the grad_fn chain back to the mask.
+    
+    This approach works because:
+    1. The modified model (new_model) is only used temporarily for one forward pass
+    2. We never call optimizer methods on new_model
+    3. We never call .parameters() or .named_parameters() on new_model
+    4. Gradient flow from outputs -> mask is preserved via the tensor computation graph
+    
+    Trade-offs accepted:
+    - new_model.parameters() would return incomplete/incorrect results
+    - Optimizer created from new_model would fail
+    - This violates PyTorch's module parameter contract
+    
+    These are acceptable because new_model is ephemeral (used once then discarded).
+    
+    Args:
+        current_module: The module to modify
+        name: Parameter name (may be nested like 'layer1.0.conv1')
+        parameters: New parameter tensor (plain Tensor, maintains gradient flow to mask)
+        
+    Raises:
+        KeyError: If nested module path cannot be resolved
+    """
+    debug_print(f"set_parameter ENTRY: name='{name}', param_shape={parameters.shape}, device={parameters.device}")
+    
+    if '.' in name:
+        # Handle nested module path
+        name_split = name.split('.')
+        module_name = name_split[0]
+        rest_name = '.'.join(name_split[1:])
+        
+        debug_print(f"set_parameter: nested path detected, looking for module '{module_name}'")
+        
+        # FIX #2: Add error handling for missing modules
+        found = False
+        for children_name, children in current_module.named_children():
+            if module_name == children_name:
+                debug_print(f"set_parameter: found module '{module_name}', recursing with rest_name='{rest_name}'")
+                set_parameter(children, rest_name, parameters)
+                found = True
+                break
+        
+        if not found:
+            available_children = [n for n, _ in current_module.named_children()]
+            debug_print(f"set_parameter ERROR: module '{module_name}' not found. Available: {available_children}", force=True)
+            raise KeyError(
+                f"set_parameter: module '{module_name}' not found in {type(current_module).__name__}. "
+                f"Full path attempted: {name}. Available children: {available_children}"
+            )
+    else:
+        # FIX #4: Add device handling - ensure tensor is on correct device
+        if len(list(current_module.parameters())) > 0:
+            target_device = next(current_module.parameters()).device
+            if parameters.device != target_device:
+                debug_print(f"set_parameter: moving parameter from {parameters.device} to {target_device}")
+                parameters = parameters.to(target_device)
+        
+        debug_print(f"set_parameter: assigning parameter '{name}' (shape={parameters.shape})")
+        # Assign plain Tensor (not nn.Parameter) to preserve gradient flow
+        # See docstring for detailed explanation of why this is intentional
+        current_module._parameters[name] = parameters
+        debug_print(f"set_parameter: successfully assigned parameter '{name}'")
 
 
 def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_names, x=None, **kwargs):
@@ -766,122 +1069,183 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
         mask_values: Learning rate scaling values for each parameter
         info: Dictionary with diagnostic information
     """
-    global _lls_storage  # Use global storage
+    global _lls_storage
     
-    debug_print(f"========== LLS ENTRY POINT ==========")
-    debug_print(f"get_lls_masks called - iter_idx: {iter_idx}, mask_algo: {mask_algo}")
-    debug_print(f"Input tensor provided: {x is not None}")
+    debug_print("=" * 80)
+    debug_print("LLS ENTRY POINT")
+    debug_print(f"Iteration: {iter_idx}, Input shape: {x.shape if x is not None else 'None'}")
+    debug_print(f"mask_algo: '{mask_algo}'")
+    debug_print(f"trainable_layer_names: {trainable_layer_names}")
+    debug_print(f"kwargs keys: {list(kwargs.keys())}")
     
     try:
-        # ====================== INITIALIZATION AND VALIDATION ======================
+        # ==================== INITIALIZATION AND VALIDATION ====================
         
-        # Check for required input tensor
-        if x is None:  # Input tensor is required for LLS
+        if x is None:
             error_msg = "[LLS] ERROR: Input tensor required for LLS but not provided"
             print(error_msg)
             raise ValueError(error_msg)
         
-        # Clean trainable layer names if provided
-        if trainable_layer_names is not None:  # If trainable layers are specified
-            # Clean layer names by removing common prefixes
+        debug_print(f"Input tensor: shape={x.shape}, dtype={x.dtype}, device={x.device}")
+        debug_print(f"Input stats: min={x.min().item():.4f}, max={x.max().item():.4f}, mean={x.mean().item():.4f}")
+        
+        if trainable_layer_names is not None:
+            original_count = len(trainable_layer_names)
             trainable_layer_names = [get_clean_layer_name(name) for name in trainable_layer_names]
+            debug_print(f"Cleaned {original_count} trainable layer names")
         
-        # Get device for tensor operations
-        device = next(model.parameters()).device  # Get device from model parameters
+        device = next(model.parameters()).device
+        debug_print(f"Model device: {device}")
         
-        # ====================== MODEL STORAGE MANAGEMENT ======================
+        # ==================== MODEL STORAGE MANAGEMENT ====================
         
-        # Get model-specific storage
-        model_id = id(model)  # Get unique identifier
-        if model_id not in _lls_storage:  # If new model
-            _lls_storage[model_id] = {}  # Create storage
-        storage = _lls_storage[model_id]  # Get storage
+        model_id = id(model)
+        debug_print(f"Model ID: {model_id}")
         
-        # Reset storage if new adaptation round
+        if model_id not in _lls_storage:
+            _lls_storage[model_id] = {}
+            debug_print(f"Initialized storage for model {model_id}")
+        storage = _lls_storage[model_id]
+        
+        debug_print(f"Current storage keys: {list(storage.keys())}")
+        
         if iter_idx == 0 and 'prev_mask' in storage:
-            storage.clear()  # Clear storage
+            debug_print("iter_idx=0 and storage exists, clearing storage")
+            storage.clear()
         
-        # ====================== CONFIGURATION PARSING ======================
+        # ==================== CONFIGURATION PARSING ====================
         
-        # Parse LLS hyperparameters
-        lls_variant = get_lls_variant(mask_algo)  # Get configuration
+        lls_variant = get_lls_variant(mask_algo)
         
-        # Debug information for initialization parameter
+        # Print configuration
+        debug_print("LLS CONFIGURATION:")
+        debug_print(f"  Strategy: {'MODEL_INTERPOLATION' if lls_variant['update'] else 'GRADIENT_MASKING'}")
+        debug_print(f"  Init: {lls_variant['init']}, Steps: {lls_variant['steps']}, LR: {lls_variant['lr']}")
+        debug_print(f"  Granularity: {lls_variant['lvl']}, nbox: {lls_variant['nbox']}, bin: {lls_variant['bin']}")
+        debug_print(f"  Application: {lls_variant['appl']}, Regularization: {lls_variant['reg']} (strength={lls_variant['regstr']})")
+        debug_print(f"  Loss: {lls_variant['loss']}, Boundary: {lls_variant['bnd']}, Patience: {lls_variant['patience']}")
+        
+        # ==================== CONTINUE WITH NORMAL LLS LOGIC ====================
+        
+        debug_print("Continuing with normal LLS execution")
+        
         init_value = str(lls_variant['init']).strip().lower()
-        # CONSERVATIVE DEBUG: Show which init branch will be taken
-        debug_print(f"[LLS_INIT] Will use initialization: '{init_value}'", force=True)
+        used_least_init = (init_value == 'least')
+        debug_print(f"Initialization method: '{init_value}', used_least_init={used_least_init}")
 
-        # Get granularity and box names
-        granularity = lls_variant['lvl']  # Get granularity level
+        granularity = lls_variant['lvl']
         box_names = get_all_param_name_list(model, granularity)
-        debug_print(f"Using {len(box_names)} boxes at {granularity} granularity")
+        debug_print(f"Model boxes ({len(box_names)} at {granularity} level): {box_names}")
         
-        # ====================== PARAMETER MAPPING ======================
+        # ==================== PARAMETER MAPPING ====================
+        # FIX: Only track trainable params for efficiency
+        debug_print("Building parameter to box mapping...")
         
-        # Map each parameter to its corresponding box index
-        param_to_box_idx = {}  # Dictionary: parameter name -> box index
-        # Loop through all parameters in the model
+        param_to_box_idx = {}
+        trainable_params_list = []
+        trainable_param_names = []
+        
+        total_params = 0
+        trainable_count = 0
+        mapped_count = 0
+        
         for idx, (name, param) in enumerate(model.named_parameters()):
-            # Check if parameter is trainable and in allowed layers
+            total_params += 1
             if param.requires_grad and (trainable_layer_names is None or 
                                        get_clean_layer_name(name) in trainable_layer_names):
-                # Find which box this parameter belongs to
+                trainable_count += 1
+                trainable_params_list.append(param)
+                trainable_param_names.append(name)
+                
                 for box_idx, box_name in enumerate(box_names):
-                    if box_name in name:  # If parameter belongs to this box
-                        param_to_box_idx[name] = box_idx  # Store box index
+                    if box_name in name:
+                        param_to_box_idx[name] = box_idx
+                        mapped_count += 1
                         break
-                else:  # Parameter doesn't belong to any box
-                    param_to_box_idx[name] = -1  # Use -1 to indicate not in any box
+                else:
+                    param_to_box_idx[name] = -1
         
-        # ====================== MASK INITIALIZATION ======================
+        debug_print(f"Parameter mapping: {total_params} total, {trainable_count} trainable, {mapped_count} mapped to boxes")
+        debug_print(f"Trainable params list: {len(trainable_params_list)} parameters")
         
-        # Create initial masks based on specified initialization method
-        # Normalize initialization value for consistent comparison
+        # ==================== MASK INITIALIZATION ====================
+        
+        # PRESERVED FIX: Keep duplicate init_value assignment (from revert)
         init_value = str(lls_variant['init']).strip().lower()
         
-        debug_print(f"EXECUTING INITIALIZATION BRANCH: '{init_value}'")
+        debug_print("=" * 50)
+        debug_print(f"MASK INITIALIZATION: Using '{init_value}' method")
+        debug_print("=" * 50)
         
-        if init_value == 'least':  # LEAST initialization
-            # CONSERVATIVE DEBUG: Confirm LEAST branch execution
-            debug_print(f"[LLS_INIT] *** LEAST INITIALIZATION EXECUTING ***", force=True)
+        if init_value == 'least':
+            # Use LEAST's defaults, not LLS's defaults
+            # Only pass 'lvl' to LEAST and let it use all its own defaults:
+            least_mask_algo = f"LEAST_lvl:{lls_variant['lvl']}"
             
-            # Call LEAST directly to get its metrics
-            debug_print(f"About to call get_LEAST_masks with mask_algo='LEAST'")
+            debug_print(f"Calling LEAST with: {least_mask_algo}")
+            debug_print("IMPORTANT: LEAST will use ALL its own defaults (bin=1, nbox=1, mthr=0.75, etc.)")
+            
             try:
-                _, least_info = get_LEAST_masks("LEAST", model, base_optimizer, iter_idx, 
+                _, least_info = get_LEAST_masks(least_mask_algo, model, base_optimizer, iter_idx, 
                                               trainable_layer_names, track_flag=True, x=x, **kwargs)
-                debug_print(f"*** LEAST CALL SUCCESSFUL *** - returned keys: {list(least_info.keys())}")
                 
-                # Validate LEAST return values
-                if 'metric_values_dict' not in least_info:
-                    error_msg = "LEAST didn't return 'metric_values_dict'. Keys: " + str(least_info.keys())
+                if 'mask_dict' not in least_info:
+                    error_msg = "LEAST didn't return 'mask_dict'"
                     print(error_msg)
                     raise KeyError(error_msg)
                 
-                # Extract the raw metrics (not the processed masks)
-                box_metrics = least_info['metric_values_dict']
-                debug_print(f"*** LEAST METRICS EXTRACTED ***")
-                debug_print(f"LEAST metrics summary: {[(k, f'{v.item():.4f}') for k, v in box_metrics.items()]}")
+                # Extract raw metrics and final masks from LEAST
+                metric_values_dict = least_info.get('metric_values_dict', {})
+                box_masks = least_info['mask_dict']
                 
-                # Create mask parameters from LEAST's metrics
-                init_mask = nn.ParameterList()
+                # Log LEAST results
+                debug_print("LEAST RETURNED:")
+                debug_print("  Raw metrics (cosine similarities before processing):")
                 for box_name in box_names:
-                    if box_name in box_metrics:
-                        value = box_metrics[box_name].item()  # Get metric value
-                        # Clip to valid range [0, 1]
-                        value = max(0.0, min(1.0, value))
-                        # Create parameter on correct device
-                        init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
-                        debug_print(f"Initialized mask for {box_name}: {value:.4f} (from LEAST)")
-                    else:
-                        debug_print(f"WARNING: No LEAST metric for box {box_name}, using default")
-                        value = 0.5  # Default value
-                        box_metrics[box_name] = torch.tensor(value)  # Store default value
-                        # Create parameter with default value
-                        init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
+                    if box_name in metric_values_dict:
+                        val = metric_values_dict[box_name]
+                        # FIX #4: Use ensure_float helper for consistent type handling
+                        val_float = ensure_float(val)
+                        debug_print(f"    {box_name}: {val_float:.6f}")
                 
-                debug_print(f"*** MASK INITIALIZATION FROM LEAST COMPLETE ***")
-                debug_print(f"Created {len(init_mask)} mask parameters from LEAST metrics")
+                debug_print("  Final masks (after nbox + bin + trust processing):")
+                for box_name in box_names:
+                    if box_name in box_masks:
+                        val = box_masks[box_name]
+                        # FIX #4: Use ensure_float helper
+                        val_float = ensure_float(val)
+                        debug_print(f"    {box_name}: {val_float:.6f}")
+                
+                # Check box name matching
+                boxes_found = sum(1 for b in box_names if b in box_masks)
+                boxes_defaulted = sum(1 for b in box_names if b not in box_masks)
+                debug_print(f"  Box matching: {boxes_found}/{len(box_names)} found, {boxes_defaulted} defaulted to 0.5")
+                if boxes_defaulted > 0:
+                    defaulted_list = [b for b in box_names if b not in box_masks]
+                    debug_print(f"  WARNING: Defaulted boxes: {defaulted_list}")
+                
+                # Create initial masks
+                debug_print("Creating initial mask ParameterList...")
+                init_mask = nn.ParameterList()
+                box_metrics = {}
+                
+                for box_name in box_names:
+                    if box_name in box_masks:
+                        # FIX #4: Use ensure_float helper
+                        value = ensure_float(box_masks[box_name])
+                        value = float(max(0.0, min(1.0, value)))
+                        init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
+                        box_metrics[box_name] = value
+                        debug_print(f"  Created mask for '{box_name}': {value:.6f}")
+                    else:
+                        value = 0.5
+                        init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
+                        box_metrics[box_name] = value
+                        debug_print(f"  Created default mask for '{box_name}': {value:.6f}")
+                
+                debug_print("INITIAL MASKS CREATED:")
+                for i, box_name in enumerate(box_names):
+                    debug_print(f"  {box_name}: {init_mask[i].item():.6f} (requires_grad={init_mask[i].requires_grad})")
                 
             except Exception as e:
                 error_msg = f"ERROR in LEAST initialization: {str(e)}"
@@ -889,457 +1253,618 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
                 print(traceback.format_exc())
                 raise ValueError(error_msg)
         
-        elif init_value in ['rgn', 'rgnbin']:  # RGN initialization
-            # CONSERVATIVE DEBUG: Confirm RGN branch execution
-            debug_print(f"[LLS_INIT] *** RGN INITIALIZATION EXECUTING *** (type: {init_value})", force=True)
+        elif init_value in ['rgn', 'rgnbin']:
+            # ==================== FIX #2: USE torch.autograd.grad FOR RGN ====================
+            # RGN initialization needs entropy gradients to calculate relative gradient norms.
+            # Using torch.autograd.grad instead of .backward() ensures no mutation of model.grad
+            debug_print("RGN initialization using torch.autograd.grad (no .grad mutation)")
             
-            # Ensure we have gradients
-            debug_print(f"Computing gradients for RGN calculation...")
-            outputs = model(x)  # Forward pass
-            loss = tta_loss(outputs)  # Compute adaptation loss
-            debug_print(f"Initial loss for RGN: {loss.item():.6f}")
-            base_optimizer.zero_grad()  # Clear any existing gradients
-            loss.backward()  # Backward pass to get gradients
+            # Use RGN (Relative Gradient Norm) for initialization
+            debug_print("Computing forward pass for RGN...")
+            outputs = model(x)
+            debug_print(f"  Outputs shape: {outputs.shape}, device: {outputs.device}")
             
-            # Get RGN values for each box
-            box_rgn = {}  # Dictionary: box index -> list of RGN values
-            # Initialize empty lists for all boxes
+            loss = tta_loss(outputs)
+            debug_print(f"  Entropy loss for RGN: {loss.item():.6f}")
+            
+            # Compute gradients as tensors (NO mutation of .grad)
+            debug_print("Computing entropy gradients via torch.autograd.grad...")
+            entropy_grads_tuple = torch.autograd.grad(
+                outputs=loss,
+                inputs=trainable_params_list,
+                create_graph=False,
+                retain_graph=False,
+                allow_unused=True
+            )
+            
+            debug_print(f"  Received {len(entropy_grads_tuple)} gradient tensors")
+            
+            # Map gradients to parameter names
+            entropy_grads = {}
+            none_count = 0
+            for name, grad_tensor in zip(trainable_param_names, entropy_grads_tuple):
+                if grad_tensor is not None:
+                    entropy_grads[name] = grad_tensor
+                else:
+                    # Parameter wasn't used in loss computation
+                    entropy_grads[name] = torch.zeros_like(
+                        dict(model.named_parameters())[name]
+                    )
+                    none_count += 1
+            
+            debug_print(f"  Computed entropy gradients for {len(entropy_grads)} params ({none_count} were unused)")
+            debug_print("  CRITICAL: Caller's model.grad UNCHANGED (no mutation)")
+            
+            # Compute RGN per box
+            debug_print("Computing RGN per box...")
+            box_rgn = {}
             for box_idx in range(len(box_names)):
                 box_rgn[box_idx] = []
             
-            debug_print(f"Calculating RGN for each parameter...")
-            # Calculate RGN for each parameter
-            param_rgn_details = []  # For detailed logging
-            for name, param in model.named_parameters():
-                # Check if parameter belongs to a box
+            # PRESERVED FIX: Keep detailed RGN tracking with param_rgn_details (from revert)
+            param_rgn_details = []
+            for name in trainable_param_names:
                 if name in param_to_box_idx and param_to_box_idx[name] >= 0:
-                    box_idx = param_to_box_idx[name]  # Get box index
-                    # Calculate RGN if gradient and parameter exist and are non-zero
-                    if param.grad is not None and param.data.norm() > 0:
-                        # RGN = gradient norm / parameter norm
-                        grad_norm = param.grad.norm().item()
+                    box_idx = param_to_box_idx[name]
+                    param = dict(model.named_parameters())[name]
+                    grad = entropy_grads[name]
+                    
+                    if grad.norm() > 0 and param.data.norm() > 0:
+                        grad_norm = grad.norm().item()
                         param_norm = param.data.norm().item()
-                        rgn = param.grad.norm() / param.data.norm()
-                        box_rgn[box_idx].append(rgn)  # Add to box's RGN list
+                        rgn = grad.norm() / param.data.norm()
+                        box_rgn[box_idx].append(rgn)
                         param_rgn_details.append((name, grad_norm, param_norm, rgn.item()))
             
-            # Log sample of RGN calculations
-            debug_print(f"Sample RGN calculations (first 5):")
-            for i, (name, gn, pn, rgn) in enumerate(param_rgn_details[:5]):
-                debug_print(f"  {name}: grad_norm={gn:.6f}, param_norm={pn:.6f}, rgn={rgn:.6f}")
-            if len(param_rgn_details) > 5:
-                debug_print(f"  ... and {len(param_rgn_details)-5} more parameters")
+            debug_print(f"Calculated RGN for {len(param_rgn_details)} parameters")
+            if len(param_rgn_details) > 0:
+                debug_print(f"Sample RGN: {param_rgn_details[0][0]} = {param_rgn_details[0][3]:.6f}")
+                debug_print(f"  (grad_norm={param_rgn_details[0][1]:.6f}, param_norm={param_rgn_details[0][2]:.6f})")
             
-            # Compute average RGN for each box
-            init_mask = nn.ParameterList()  # List to store mask parameters
-            box_metrics = {}  # Dictionary to store metric values
+            # Compute average RGN per box
+            debug_print("Creating initial masks from RGN values...")
+            init_mask = nn.ParameterList()
+            box_metrics = {}
             
-            debug_print(f"Computing average RGN per box...")
-            # Process each box
+            debug_print("RGN per box (before normalization):")
             for box_idx in range(len(box_names)):
-                if box_idx in box_rgn and len(box_rgn[box_idx]) > 0:  # If box has RGN values
-                    # Calculate average RGN
+                if box_idx in box_rgn and len(box_rgn[box_idx]) > 0:
                     rgn_list = [r.item() for r in box_rgn[box_idx]]
                     avg_rgn = sum(rgn_list) / len(rgn_list)
+                    debug_print(f"  {box_names[box_idx]}: {avg_rgn:.6f} (from {len(rgn_list)} params)")
                     value = torch.tensor(avg_rgn, device=device)
-                    box_metrics[box_names[box_idx]] = avg_rgn  # Store metric
-                    debug_print(f"Box {box_idx} ({box_names[box_idx]}): avg_rgn={avg_rgn:.6f} from {len(rgn_list)} parameters")
-                else:  # No RGN values for this box
-                    # Use default value
+                    box_metrics[box_names[box_idx]] = avg_rgn
+                else:
+                    debug_print(f"  {box_names[box_idx]}: 0.5 (default, no valid params)")
                     value = torch.tensor(0.5, device=device)
-                    box_metrics[box_names[box_idx]] = 0.5  # Store default metric
-                    debug_print(f"Box {box_idx} ({box_names[box_idx]}): default=0.5 (no valid parameters)")
+                    box_metrics[box_names[box_idx]] = 0.5
                 
-                # Create parameter on correct device
                 init_mask.append(nn.Parameter(value.view(1), requires_grad=True))
             
-            # Normalize the masks
-            debug_print(f"Normalizing RGN masks...")
-            mask_values = [m.item() for m in init_mask]  # Get all mask values
-            debug_print(f"Pre-normalization mask values: {[f'{v:.6f}' for v in mask_values[:5]]}")
-            if any(v > 0 for v in mask_values):  # If any mask is positive
-                max_value = max(mask_values)  # Get maximum value
-                if max_value > 0:  # If maximum is positive
-                    debug_print(f"Max RGN value: {max_value:.6f}, normalizing...")
-                    # Normalize all masks by maximum value
+            # Normalize RGN values
+            debug_print("Normalizing RGN masks...")
+            mask_values = [m.item() for m in init_mask]
+            if any(v > 0 for v in mask_values):
+                max_value = max(mask_values)
+                debug_print(f"  Max RGN value: {max_value:.6f}")
+                if max_value > 0:
                     for i, m in enumerate(init_mask):
-                        old_val = m.item()
                         init_mask[i].data = m.data / max_value
-                        debug_print(f"Normalized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.6f}")
-                        
+            
             # Binarize if requested
-            if init_value == 'rgnbin':  # If binarization requested
-                debug_print(f"Binarizing RGN masks with threshold 0.5...")
+            if init_value == 'rgnbin':
+                debug_print("Binarizing RGN masks (threshold=0.5)")
+                bin_count_one = 0
+                bin_count_zero = 0
                 for i, m in enumerate(init_mask):
-                    old_val = m.item()
-                    # Convert to binary (0 or 1) based on threshold 0.5
+                    original = m.item()
                     init_mask[i].data = (m.data > 0.5).float()
-                    debug_print(f"Binarized mask for {box_names[i]}: {old_val:.6f} -> {init_mask[i].item():.1f}")
+                    if init_mask[i].item() > 0.5:
+                        bin_count_one += 1
+                    else:
+                        bin_count_zero += 1
+                    debug_print(f"  {box_names[i]}: {original:.6f} -> {init_mask[i].item():.6f}")
+                debug_print(f"  Binarization result: {bin_count_one} boxes set to 1.0, {bin_count_zero} set to 0.0")
             
-            debug_print(f"*** RGN INITIALIZATION COMPLETE ***")
-            debug_print(f"RGN metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
-        
-        elif init_value == 'prev' and 'prev_mask' in storage:  # Previous mask initialization
-            # CONSERVATIVE DEBUG: Confirm PREV branch execution
-            debug_print(f"[LLS_INIT] *** PREV INITIALIZATION EXECUTING ***", force=True)
-            # Use previous iteration's masks
-            init_mask = copy.deepcopy(storage['prev_mask'])  # Copy previous masks
-            # Create metrics dictionary
-            box_metrics = {box_names[i]: m.item() for i, m in enumerate(init_mask)}
-            debug_print(f"Loaded {len(init_mask)} masks from previous iteration")
-            debug_print(f"Previous mask values: {[(box_names[i], f'{m.item():.4f}') for i, m in enumerate(init_mask)]}")
-            
-            # Add new masks for any new boxes
-            if len(init_mask) < len(box_names):  # If we have more boxes now
-                debug_print(f"Adding masks for {len(box_names) - len(init_mask)} new boxes")
-                # Add default masks for new boxes
-                for i in range(len(init_mask), len(box_names)):
-                    # Create parameter with default value 0.5
-                    init_mask.append(nn.Parameter(torch.tensor([0.5], device=device), requires_grad=True))
-                    box_metrics[box_names[i]] = 0.5  # Store default metric
-                    debug_print(f"Added new mask for box {i} ({box_names[i]}): 0.5 (default)")
-            debug_print(f"*** PREVIOUS MASK INITIALIZATION COMPLETE ***")
-        
-        else:  # Default initialization
-            # CONSERVATIVE DEBUG: Confirm DEFAULT branch execution
-            debug_print(f"[LLS_INIT] *** DEFAULT INITIALIZATION EXECUTING *** (finit: {lls_variant['finit']})", force=True)
-            
-            # Use default or specified initialization value
-            init_mask = nn.ParameterList()  # List to store mask parameters
-            box_metrics = {}  # Dictionary to store metric values
-            
-            # Get initialization value
-            if is_numeric(lls_variant['finit']):  # If numeric value specified
-                init_value_num = float(lls_variant['finit'])  # Convert to float
-                debug_print(f"Using constant initialization value: {init_value_num}")
-            elif lls_variant['finit'] == 'rand':  # If random initialization requested
-                init_value_num = None  # Flag for random values
-                debug_print(f"Using random initialization")
-            else:  # Invalid value
-                init_value_num = 0.5  # Use default value
-                debug_print(f"Invalid finit value, using default: 0.5")
-            
-            # Create masks for each box
-            debug_print(f"Creating initial masks for {len(box_names)} boxes...")
+            debug_print("INITIAL MASKS AFTER NORMALIZATION:")
             for i, box_name in enumerate(box_names):
-                if init_value_num is None:  # Random initialization
-                    # Generate random value between 0 and 1
-                    value = torch.rand(1, device=device).item()
-                    # Create parameter with random value
+                debug_print(f"  {box_name}: {init_mask[i].item():.6f}")
+        
+        elif init_value == 'prev' and 'prev_mask' in storage:
+            # Use previous iteration's masks
+            debug_print("Using previous iteration masks from storage")
+            # FIX #5: Load from detached storage (will be list of floats, not Parameters)
+            prev_mask_values = storage['prev_mask']
+            debug_print(f"  Loaded {len(prev_mask_values)} previous mask values")
+            
+            init_mask = nn.ParameterList()
+            box_metrics = {}
+            
+            for i, box_name in enumerate(box_names):
+                if i < len(prev_mask_values):
+                    value = prev_mask_values[i]
                     init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
-                    box_metrics[box_name] = value  # Store metric
-                    debug_print(f"Initial mask for {box_name}: {value:.6f} (random)")
-                else:  # Constant initialization
-                    # Create parameter with constant value
+                    box_metrics[box_name] = value
+                    debug_print(f"  Restored mask for '{box_name}': {value:.6f}")
+                else:
+                    # New box not in previous mask
+                    value = 0.5
+                    init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
+                    box_metrics[box_name] = value
+                    debug_print(f"  Adding new box '{box_name}' with default 0.5")
+        
+        else:
+            # Default initialization
+            debug_print(f"Using default initialization (method='{init_value}')")
+            init_mask = nn.ParameterList()
+            box_metrics = {}
+            
+            if is_numeric(lls_variant['finit']):
+                init_value_num = float(lls_variant['finit'])
+                debug_print(f"Using constant initialization: {init_value_num}")
+            elif lls_variant['finit'] == 'rand':
+                init_value_num = None
+                debug_print("Using random initialization")
+            else:
+                init_value_num = 0.5
+                debug_print("Using default initialization: 0.5")
+            
+            for i, box_name in enumerate(box_names):
+                if init_value_num is None:
+                    value = torch.rand(1, device=device).item()
+                    init_mask.append(nn.Parameter(torch.tensor([value], device=device), requires_grad=True))
+                    box_metrics[box_name] = value
+                    debug_print(f"  Random mask for '{box_name}': {value:.6f}")
+                else:
                     init_mask.append(nn.Parameter(torch.tensor([init_value_num], device=device), requires_grad=True))
-                    box_metrics[box_name] = init_value_num  # Store metric
-                    debug_print(f"Initial mask for {box_name}: {init_value_num:.6f} (constant)")
+                    box_metrics[box_name] = init_value_num
+                    debug_print(f"  Constant mask for '{box_name}': {init_value_num:.6f}")
+        
+        debug_print(f"Initialization complete: created {len(init_mask)} mask parameters")
+        
+        # ==================== MODEL PREPARATION ====================
+        
+        debug_print("=" * 50)
+        debug_print("MODEL PREPARATION")
+        debug_print("=" * 50)
+        
+        debug_print("Creating deep copy of model as pre_model...")
+        pre_model = copy.deepcopy(model)
+        debug_print("  pre_model created successfully")
+        
+        if lls_variant['update'] == True:
+            # Model interpolation: create finetuned model
+            debug_print("MODEL INTERPOLATION: Creating finetuned model")
             
-            debug_print(f"*** DEFAULT INITIALIZATION COMPLETE ***")
-            debug_print(f"Default init metrics summary: {[(k, f'{v:.4f}') for k, v in box_metrics.items()]}")
-        
-        # Print initial mask values for verification
-        debug_print(f"*** INITIAL MASK VALUES SUMMARY ***")
-        for i, mask in enumerate(init_mask):
-            if i < len(box_names):
-                debug_print(f"{box_names[i]}: {mask.item():.6f}")
-        
-        # ====================== MODEL PREPARATION ======================
-        
-        # Create a copy of the current model as the reference "pre-adaptation" model
-        pre_model = copy.deepcopy(model)  # Deep copy to preserve all parameters
-        
-        # For model interpolation strategy - create a finetuned model
-        if lls_variant['update'] == True:  # If using model interpolation
-            ft_model = copy.deepcopy(model)  # Deep copy for finetuned model
-            # Copy optimizer parameters
+            debug_print("  Copying model for finetuning...")
+            ft_model = copy.deepcopy(model)
+            
+            debug_print("  Setting up finetuning optimizer...")
             base_opt_params = copy.deepcopy(base_optimizer.defaults)
-            # Create optimizer for finetuned model
+            debug_print(f"  Base optimizer params: {base_opt_params}")
+            
             ft_opt = type(base_optimizer)(ft_model.parameters(), **base_opt_params)
+            debug_print(f"  Created finetuning optimizer: {type(ft_opt).__name__}")
             
-            # Forward pass to compute loss
-            ft_outputs = ft_model(x)  # Forward pass
-            ft_loss = tta_loss(ft_outputs)  # Compute adaptation loss
+            # PRESERVED FIX: Use original ft_loss structure (from revert)
+            debug_print("  Computing loss for finetuning...")
+            ft_outputs = ft_model(x)
+            debug_print(f"  ft_outputs shape: {ft_outputs.shape}")
             
-            # Backward pass and update
-            ft_opt.zero_grad()  # Clear gradients
-            ft_loss.backward()  # Backward pass
-            ft_opt.step()  # Update parameters
+            ft_loss = tta_loss(ft_outputs)
+            debug_print(f"  Initial finetuned loss: {ft_loss.item():.6f}")
             
-            # Compute new loss after update
-            with torch.no_grad():  # No gradients needed
-                # Forward pass with updated model
+            debug_print("  Performing gradient descent step...")
+            ft_opt.zero_grad()
+            ft_loss.backward()
+            ft_opt.step()
+            
+            debug_print("  Measuring loss after finetuning step...")
+            with torch.no_grad():
                 ft_outputs_after = ft_model(x)
                 ft_loss_after = tta_loss(ft_outputs_after).item()
-        
-        # For gradient masking strategy - collect the gradients
-        else:  # If using gradient masking
-            # Ensure gradients exist
-            outputs = model(x)  # Forward pass
-            loss = tta_loss(outputs)  # Compute adaptation loss
-            base_optimizer.zero_grad()  # Clear gradients
-            loss.backward()  # Backward pass
             
-            # Collect all gradients
-            grads = {}  # Dictionary: parameter name -> gradient
-            # Loop through all parameters
-            for name, param in model.named_parameters():
-                # Store gradient (or zero tensor if no gradient)
-                if param.grad is None:
-                    grads[name] = torch.zeros_like(param)
+            debug_print(f"  Loss after SGD step: {ft_loss_after:.6f}, delta: {ft_loss_after - ft_loss.item():.6f}")
+            
+            if ft_loss_after < ft_loss.item():
+                debug_print("  SUCCESS: Finetuning reduced loss")
+            else:
+                debug_print("  WARNING: Finetuning increased loss")
+        
+        else:
+            # ==================== FIX #3: USE torch.autograd.grad FOR ENTROPY GRADS ====================
+            # Gradient masking path needs entropy gradients to simulate masked updates.
+            # Using torch.autograd.grad instead of .backward() ensures no mutation of model.grad
+            debug_print("GRADIENT MASKING: Computing entropy gradients via torch.autograd.grad")
+            
+            debug_print("  Computing forward pass...")
+            outputs = model(x)
+            debug_print(f"  Outputs shape: {outputs.shape}")
+            
+            loss = tta_loss(outputs)
+            debug_print(f"  Entropy loss: {loss.item():.6f}")
+            
+            debug_print("  Computing gradients via torch.autograd.grad...")
+            # Compute gradients as tensors (NO mutation of .grad)
+            entropy_grads_tuple = torch.autograd.grad(
+                outputs=loss,
+                inputs=trainable_params_list,
+                create_graph=False,
+                retain_graph=False,
+                allow_unused=True
+            )
+            
+            debug_print(f"  Received {len(entropy_grads_tuple)} gradient tensors")
+            
+            # Map to dictionary
+            grads = {}
+            grad_count = 0
+            none_count = 0
+            for name, grad_tensor in zip(trainable_param_names, entropy_grads_tuple):
+                if grad_tensor is not None:
+                    grads[name] = grad_tensor
+                    grad_count += 1
                 else:
-                    grads[name] = param.grad.clone()
+                    grads[name] = torch.zeros_like(
+                        dict(model.named_parameters())[name]
+                    )
+                    none_count += 1
+            
+            debug_print(f"  Collected {grad_count} non-None gradients, {none_count} unused parameters")
+            debug_print("  CRITICAL: Caller's model.grad UNCHANGED (no mutation)")
         
-        # ====================== MASK OPTIMIZATION ======================
+        # ==================== MASK OPTIMIZATION ====================
         
-        # Make a copy for tracking best masks
-        debug_print(f"*** STARTING MASK OPTIMIZATION ***")
-        best_mask = copy.deepcopy(init_mask)  # Copy initial masks
-        best_loss = float('inf')  # Initialize with infinity
+        debug_print("=" * 50)
+        debug_print("MASK OPTIMIZATION")
+        debug_print("=" * 50)
         
-        # Setup for early stopping
-        patience = int(lls_variant['patience'])  # Convert patience to integer
-        patience_counter = patience  # Initialize patience counter
+        debug_print("MASK OPTIMIZATION SETUP:")
+        debug_print(f"  Max steps: {lls_variant['steps']}, Patience: {lls_variant['patience']}, Mask LR: {lls_variant['lr']}")
+        debug_print(f"  Regularization: {lls_variant['reg']} (strength={lls_variant['regstr']})")
+        debug_print(f"  Boundary handling: {lls_variant['bnd']}")
         
-        # Create optimizer for mask parameters
-        mask_lr = float(lls_variant['lr'])  # Convert learning rate to float
-        # Create Adam optimizer for mask parameters
-        mask_opt = torch.optim.Adam(init_mask, lr=mask_lr)
+        best_mask = copy.deepcopy(init_mask)
+        best_loss = float('inf')
+        debug_print(f"  Initialized best_loss to infinity")
         
-        # Optimization loop
-        max_steps = int(lls_variant['steps'])  # Convert to integer
-        debug_print(f"Starting optimization with {max_steps} steps (patience={patience})")
+        patience = int(lls_variant['patience'])
+        patience_counter = patience
+        debug_print(f"  Patience counter initialized to {patience}")
         
-        for step in range(max_steps):  # Loop through optimization steps
-            # Current mask being optimized
-            curr_mask = copy.deepcopy(init_mask)  # Copy current masks
+        mask_lr = float(lls_variant['lr'])
+        # FIX: Use list(init_mask) instead of init_mask directly
+        debug_print(f"  Creating Adam optimizer for masks with lr={mask_lr}")
+        mask_opt = torch.optim.Adam(list(init_mask), lr=mask_lr)
+        debug_print(f"  Mask optimizer created: {len(list(init_mask))} parameters")
+        
+        max_steps = int(lls_variant['steps'])
+        debug_print(f"  Will run for maximum {max_steps} optimization steps")
+        
+        # Print initial masks before optimization
+        debug_print("Initial masks (before optimization):")
+        for i, box_name in enumerate(box_names):
+            debug_print(f"  {box_name}: {init_mask[i].item():.6f}")
+        
+        # Optimization loop - only print for first 2 steps and last step
+        debug_print("Starting optimization loop...")
+        
+        for step in range(max_steps):
+            if step <= 1 or step == max_steps - 1:
+                debug_print(f"--- Step {step}/{max_steps} ---")
             
             # Retain gradients for inspection
-            for param in curr_mask:  # Loop through all mask parameters
-                param.retain_grad()  # Keep gradients after backward pass
-            
-            # *** THE CRITICAL FIX: Recreate optimizer for current mask tensor objects ***
-            mask_opt = torch.optim.Adam(curr_mask, lr=mask_lr)
+            for param in init_mask:
+                param.retain_grad()
             
             # Apply mask to create modified model
-            if lls_variant['update'] == True:  # Model interpolation strategy
-                # Create a new model by interpolating between pre_model and ft_model
-                new_model = copy.deepcopy(pre_model)  # Start with pre-adaptation model
+            if lls_variant['update'] == True:
+                # Model interpolation
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Creating interpolated model...")
                 
-                # Loop through all parameters
-                for idx, (name, param) in enumerate(new_model.named_parameters()):
-                    # Check if parameter belongs to a box
-                    if name in param_to_box_idx and param_to_box_idx[name] >= 0:
-                        # Get corresponding parameter from finetuned model
-                        ft_param = None
-                        # Find matching parameter in finetuned model
-                        for ft_name, ft_p in ft_model.named_parameters():
-                            if ft_name == name:  # If names match
-                                ft_param = ft_p  # Store parameter
-                                break
-                        
-                        if ft_param is not None:  # If found in finetuned model
-                            # Apply mask as interpolation weight
-                            box_idx = param_to_box_idx[name]  # Get box index
-                            mask_value = curr_mask[box_idx].item()  # Get mask value
-                            # Interpolate: (1-mask)*pre + mask*finetuned
-                            param.data = (1 - mask_value) * param.data + mask_value * ft_param.data
-            else:  # Gradient masking strategy
-                # Create a new model by applying masked gradients
-                new_model = copy.deepcopy(pre_model)  # Start with pre-adaptation model
+                new_model = copy.deepcopy(pre_model)
                 
-                # Loop through all parameters
-                for name, param in new_model.named_parameters():
-                    # Check if parameter belongs to a box and has a gradient
-                    if name in param_to_box_idx and param_to_box_idx[name] >= 0 and name in grads:
-                        box_idx = param_to_box_idx[name]  # Get box index
-                        mask_value = curr_mask[box_idx].item()  # Get mask value
+                pre_params_dict = dict(pre_model.named_parameters())
+                ft_params_dict = dict(ft_model.named_parameters())
+                
+                interpolated_params = 0
+                for name in param_to_box_idx.keys():
+                    if param_to_box_idx[name] >= 0:
+                        box_idx = param_to_box_idx[name]
+                        mask = init_mask[box_idx]
                         
-                        # Apply masked gradient update
-                        if mask_value > 0:  # If mask is non-zero
-                            # Simplified Adam-like update (just for simulation)
-                            # param = param - mask * lr * gradient
-                            param.data = param.data - mask_value * base_optimizer.defaults['lr'] * grads[name]
+                        pre_param = pre_params_dict[name]
+                        ft_param = ft_params_dict[name]
+                        
+                        pre_param_detached = pre_param.detach()
+                        ft_param_detached = ft_param.detach()
+                        
+                        new_param_value = (1 - mask) * pre_param_detached + mask * ft_param_detached
+                        
+                        set_parameter(new_model, name, new_param_value)
+                        interpolated_params += 1
+                
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Interpolated {interpolated_params} parameters")
+                    
+            else:
+                # Gradient masking
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Creating gradient-masked model...")
+                
+                new_model = copy.deepcopy(pre_model)
+                
+                pre_params_dict = dict(pre_model.named_parameters())
+                base_lr = base_optimizer.defaults['lr']
+                
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Using base_lr={base_lr} for gradient masking")
+                
+                masked_params = 0
+                for name in param_to_box_idx.keys():
+                    if param_to_box_idx[name] >= 0 and name in grads:
+                        box_idx = param_to_box_idx[name]
+                        mask = init_mask[box_idx]
+                        
+                        param = pre_params_dict[name]
+                        grad = grads[name]
+                        
+                        param_detached = param.detach()
+                        grad_detached = grad.detach()
+                        
+                        new_param_value = param_detached - mask * base_lr * grad_detached
+                        
+                        set_parameter(new_model, name, new_param_value)
+                        masked_params += 1
+                
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Masked {masked_params} parameters")
             
             # Calculate loss for the current mask
-            if lls_variant['loss'] == 'prev' and 'prev_x' in storage:  # Use previous input
-                outputs = new_model(storage['prev_x'])  # Forward pass with previous input
-            else:  # Default to current input
-                outputs = new_model(x)  # Forward pass with current input
+            if lls_variant['loss'] == 'prev' and 'prev_x' in storage:
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  Using previous input from storage")
+                outputs = new_model(storage['prev_x'])
+            else:
+                outputs = new_model(x)
                 
-            # Calculate loss
-            mask_loss = tta_loss(outputs)  # Compute adaptation loss
+            mask_loss = tta_loss(outputs)
             
             # Add regularization
-            reg_loss = 0  # Initialize regularization loss
-            if lls_variant['reg'] == 'l1':  # L1 regularization
-                reg_strength = float(lls_variant['regstr'])  # Get regularization strength
-                # Sum of absolute values of all mask parameters
-                reg_loss = reg_strength * sum(param.abs().sum() for param in curr_mask)
-            elif lls_variant['reg'] == 'l2':  # L2 regularization
-                reg_strength = float(lls_variant['regstr'])  # Get regularization strength
-                # Sum of squares of all mask parameters
-                reg_loss = reg_strength * sum((param ** 2).sum() for param in curr_mask)
+            reg_loss = 0
+            if lls_variant['reg'] == 'l1':
+                reg_strength = float(lls_variant['regstr'])
+                reg_loss = reg_strength * sum(param.abs().sum() for param in init_mask)
+            elif lls_variant['reg'] == 'l2':
+                reg_strength = float(lls_variant['regstr'])
+                reg_loss = reg_strength * sum((param ** 2).sum() for param in init_mask)
             
-            # Total loss
-            total_loss = mask_loss + reg_loss  # Add main loss and regularization
+            total_loss = mask_loss + reg_loss
             
-            # Skip if loss is NaN or Inf
-            if torch.isnan(total_loss) or torch.isinf(total_loss):  # Check for invalid loss
+            if torch.isnan(total_loss) or torch.isinf(total_loss):
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  WARNING: Invalid loss (NaN or Inf), skipping step")
                 continue
             
             # Update mask
-            mask_opt.zero_grad()  # Clear gradients
-            total_loss.backward()  # Backward pass
+            mask_opt.zero_grad()
+            total_loss.backward()
             
             # Check for NaN or Inf gradients
-            has_bad_grad = False  # Flag for bad gradients
-            for idx, param in enumerate(curr_mask):
-                if param.grad is not None:
-                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                        param.grad.zero_()  # Zero out bad gradients
-                        has_bad_grad = True  # Set flag
+            has_bad_grad = False
+            if step <= 1 or step == max_steps - 1:
+                for idx, param in enumerate(init_mask):
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            debug_print(f"  WARNING: Bad gradient for mask {idx}, zeroing it")
+                            param.grad.zero_()
+                            has_bad_grad = True
+            else:
+                for idx, param in enumerate(init_mask):
+                    if param.grad is not None:
+                        if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                            param.grad.zero_()
+                            has_bad_grad = True
             
-            if not has_bad_grad:  # If no bad gradients
-                mask_opt.step()  # Update parameters
+            if not has_bad_grad:
+                mask_opt.step()
+            elif step <= 1 or step == max_steps - 1:
+                debug_print(f"  Skipped optimizer step due to bad gradients")
+            
+            # Print detailed info for first 2 steps and last step
+            if step <= 1 or step == max_steps - 1:
+                debug_print(f"Step {step}:")
+                debug_print(f"  Mask loss (entropy): {mask_loss.item():.6f}, Reg loss: {reg_loss.item() if isinstance(reg_loss, torch.Tensor) else reg_loss:.6f}, Total: {total_loss.item():.6f}")
+                debug_print(f"  Mask values: {[f'{m.item():.4f}' for m in init_mask]}")
+                if step <= 1:
+                    debug_print(f"  Mask gradients: {[f'{m.grad.item():.6f}' if m.grad is not None else 'None' for m in init_mask]}")
             
             # Apply bounds to mask values
-            if lls_variant['bnd'] == 'clip':  # Clipping
-                for idx, param in enumerate(curr_mask):
-                    # Clip values to [0, 1] range
-                    curr_mask[idx].data.clamp_(0, 1)
-            elif lls_variant['bnd'] == 'scale':  # Min-max scaling
-                all_values = torch.cat([param.view(-1) for param in curr_mask])
-                min_val = all_values.min()  # Get minimum value
-                max_val = all_values.max()  # Get maximum value
-                if max_val > min_val:  # If range is non-zero
-                    for idx, param in enumerate(curr_mask):
-                        # Scale to [0, 1] range
+            if lls_variant['bnd'] == 'clip':
+                for idx, param in enumerate(init_mask):
+                    init_mask[idx].data.clamp_(0, 1)
+            elif lls_variant['bnd'] == 'scale':
+                all_values = torch.cat([param.view(-1) for param in init_mask])
+                min_val = all_values.min()
+                max_val = all_values.max()
+                if max_val > min_val:
+                    for idx, param in enumerate(init_mask):
                         scaled_value = (param.data - min_val) / (max_val - min_val)
-                        curr_mask[idx].data = scaled_value
+                        init_mask[idx].data = scaled_value
+                    if step <= 1 or step == max_steps - 1:
+                        debug_print(f"  Applied scaling: min={min_val.item():.6f}, max={max_val.item():.6f}")
             
             # Update best mask if loss improved
-            if mask_loss.item() < best_loss:  # If loss improved
-                best_mask = copy.deepcopy(curr_mask)  # Update best mask
-                best_loss = mask_loss.item()  # Update best loss
-                patience_counter = patience  # Reset patience counter
+            if mask_loss.item() < best_loss:
+                best_mask = copy.deepcopy(init_mask)
+                best_loss = mask_loss.item()
+                patience_counter = patience
                 
-                # Only print for key steps to avoid flood
-                if step == 0 or step % 10 == 0 or step == max_steps - 1:
-                    debug_print(f"Step {step}: New best loss {best_loss:.6f}")
-            else:  # If loss didn't improve
-                patience_counter -= 1  # Decrement patience counter
+                if step <= 1 or step == max_steps - 1:
+                    debug_print(f"  NEW BEST LOSS: {best_loss:.6f}")
+            else:
+                patience_counter -= 1
                 
-                if patience_counter <= 0:  # If patience exhausted
-                    debug_print(f"Early stopping at step {step} with best loss {best_loss:.6f}")
-                    break  # Stop optimization
-            
-            # Update masks for next iteration
-            init_mask = curr_mask  # Update masks
+                if patience_counter <= 0:
+                    debug_print(f"Early stopping at step {step}, best loss: {best_loss:.6f}")
+                    break
         
-        # ====================== POST-PROCESSING ======================
+        debug_print(f"Optimization complete - Final best loss: {best_loss:.6f}")
         
-        # Box selection (single box) if specified
-        if lls_variant['nbox'] == '1':  # Single box mode
-            # Find max mask value
-            max_idx = -1
-            max_value = -float('inf')
-            for i, param in enumerate(best_mask):
-                if param.item() > max_value:  # If larger than current max
-                    max_value = param.item()  # Update max value
-                    max_idx = i  # Update max index
+        # ==================== POST-PROCESSING ====================
+        
+        debug_print("=" * 50)
+        debug_print("POST-PROCESSING")
+        debug_print("=" * 50)
+        
+        skip_nbox_bin = (used_least_init and max_steps == 0)
+        
+        if skip_nbox_bin:
+            debug_print("POST-PROCESSING: Skipping nbox/bin (LEAST init with no optimization)")
+        else:
+            debug_print("POST-PROCESSING:")
             
-            # Zero out all except maximum
-            if max_idx >= 0:  # If valid max found
-                debug_print(f"Single box mode: keeping only box {max_idx} ({box_names[max_idx]}) = {max_value:.6f}")
+            if lls_variant['nbox'] == '1':
+                debug_print("  Applying nbox=1 constraint...")
+                max_idx = -1
+                max_value = -float('inf')
                 for i, param in enumerate(best_mask):
-                    if i != max_idx:  # If not the max box
-                        best_mask[i].data = torch.tensor([0.0], device=device)  # Zero out
-        
-        # Binarize masks if specified
-        if lls_variant['bin'] == '1':  # Binarization mode
-            threshold = float(lls_variant['mthr']) if 'mthr' in lls_variant else 0.5  # Get threshold
-            debug_print(f"Binarizing masks with threshold {threshold}")
-            for i, param in enumerate(best_mask):
-                # Convert to binary (0 or 1) based on threshold
-                binary_value = 1.0 if param.item() >= threshold else 0.0
-                best_mask[i].data = torch.tensor([binary_value], device=device)
-        
-        # Apply mask combination strategy
-        if lls_variant['appl'] == 'curr' or 'prev_mask' not in storage:  # Current masks
-            final_mask = best_mask  # Use best masks from this iteration
-        elif lls_variant['appl'] == 'avg':  # Average with previous
-            # Average with previous mask
-            count = storage.get('count', 0)  # Get previous count
-            prev_mask = storage['prev_mask']  # Get previous masks
-            final_mask = copy.deepcopy(best_mask)  # Create copy for final masks
+                    if param.item() > max_value:
+                        max_value = param.item()
+                        max_idx = i
+                
+                if max_idx >= 0:
+                    debug_print(f"  nbox=1: Keeping only box {max_idx} ({box_names[max_idx]}) = {max_value:.6f}")
+                    for i, param in enumerate(best_mask):
+                        if i != max_idx:
+                            best_mask[i].data = torch.tensor([0.0], device=device)
+                            debug_print(f"    Zeroed box {i} ({box_names[i]})")
             
-            for i, (curr, prev) in enumerate(zip(best_mask, prev_mask)):
-                if i < len(box_names):  # Check index is valid
-                    # Compute weighted average based on count
-                    avg_value = (count * prev.data + curr.data) / (count + 1)
-                    final_mask[i].data = avg_value  # Store average
-        elif lls_variant['appl'] == 'prod':  # Product with previous
-            # Multiply with previous mask
-            prev_mask = storage['prev_mask']  # Get previous masks
-            final_mask = copy.deepcopy(best_mask)  # Create copy for final masks
+            if lls_variant['bin'] == '1':
+                threshold = float(lls_variant['mthr']) if 'mthr' in lls_variant else 0.5
+                debug_print(f"  Binarizing masks (threshold={threshold})")
+                one_count = 0
+                zero_count = 0
+                for i, param in enumerate(best_mask):
+                    original = param.item()
+                    binary_value = 1.0 if param.item() >= threshold else 0.0
+                    best_mask[i].data = torch.tensor([binary_value], device=device)
+                    if binary_value > 0.5:
+                        one_count += 1
+                    else:
+                        zero_count += 1
+                    debug_print(f"    {box_names[i]}: {original:.6f} -> {binary_value:.6f}")
+                debug_print(f"  Binarization result: {one_count} set to 1.0, {zero_count} set to 0.0")
+        
+        # ==================== MASK APPLICATION ====================
+        
+        debug_print("=" * 50)
+        debug_print("MASK APPLICATION")
+        debug_print("=" * 50)
+        
+        debug_print(f"MASK APPLICATION: Strategy={lls_variant['appl']}")
+        
+        if lls_variant['appl'] == 'curr' or 'prev_mask' not in storage:
+            final_mask = best_mask
+            debug_print("  Using current masks (no temporal blending)")
+        elif lls_variant['appl'] == 'avg':
+            count = storage.get('count', 0)
+            # FIX #5: Load from detached storage (list of floats)
+            prev_mask_values = storage['prev_mask']
+            final_mask = copy.deepcopy(best_mask)
+            debug_print(f"  Averaging with previous (count={count})")
             
-            for i, (curr, prev) in enumerate(zip(best_mask, prev_mask)):
-                if i < len(box_names):  # Check index is valid
-                    # Compute product
-                    prod_value = curr.data * prev.data
-                    final_mask[i].data = prod_value  # Store product
-        elif lls_variant['appl'] == 'ema':  # Exponential moving average
-            # Exponential moving average
-            prev_mask = storage['prev_mask']  # Get previous masks
-            alpha = float(lls_variant['emalr'])  # Get EMA alpha
-            final_mask = copy.deepcopy(best_mask)  # Create copy for final masks
+            for i in range(len(best_mask)):
+                if i < len(box_names) and i < len(prev_mask_values):
+                    curr_val = best_mask[i].item()
+                    prev_val = prev_mask_values[i]
+                    avg_value = (count * prev_val + curr_val) / (count + 1)
+                    final_mask[i].data = torch.tensor([avg_value], device=device)
+                    debug_print(f"    {box_names[i]}: curr={curr_val:.6f}, prev={prev_val:.6f}, avg={avg_value:.6f}")
+        elif lls_variant['appl'] == 'prod':
+            # FIX #5: Load from detached storage (list of floats)
+            prev_mask_values = storage['prev_mask']
+            final_mask = copy.deepcopy(best_mask)
+            debug_print("  Computing product with previous")
             
-            for i, (curr, prev) in enumerate(zip(best_mask, prev_mask)):
-                if i < len(box_names):  # Check index is valid
-                    # Compute EMA: (1-alpha)*prev + alpha*curr
-                    ema_value = (1 - alpha) * prev.data + alpha * curr.data
-                    final_mask[i].data = ema_value  # Store EMA
-        else:  # Unknown strategy
-            final_mask = best_mask  # Use best masks from this iteration
+            for i in range(len(best_mask)):
+                if i < len(box_names) and i < len(prev_mask_values):
+                    curr_val = best_mask[i].item()
+                    prev_val = prev_mask_values[i]
+                    prod_value = curr_val * prev_val
+                    final_mask[i].data = torch.tensor([prod_value], device=device)
+                    debug_print(f"    {box_names[i]}: curr={curr_val:.6f}, prev={prev_val:.6f}, prod={prod_value:.6f}")
+        elif lls_variant['appl'] == 'ema':
+            # FIX #5: Load from detached storage (list of floats)
+            prev_mask_values = storage['prev_mask']
+            alpha = float(lls_variant['emalr'])
+            final_mask = copy.deepcopy(best_mask)
+            debug_print(f"  Computing EMA (alpha={alpha})")
+            
+            for i in range(len(best_mask)):
+                if i < len(box_names) and i < len(prev_mask_values):
+                    curr_val = best_mask[i].item()
+                    prev_val = prev_mask_values[i]
+                    ema_value = (1 - alpha) * prev_val + alpha * curr_val
+                    final_mask[i].data = torch.tensor([ema_value], device=device)
+                    debug_print(f"    {box_names[i]}: curr={curr_val:.6f}, prev={prev_val:.6f}, ema={ema_value:.6f}")
+        else:
+            final_mask = best_mask
+            debug_print("  Using best mask directly (unknown strategy)")
         
-        # Store for next iteration
-        storage['prev_mask'] = final_mask  # Store masks
-        storage['count'] = storage.get('count', 0) + 1  # Increment count
+        # FIX #5: Store masks as plain floats (not ParameterList) using helper
+        debug_print("Saving final masks to storage...")
+        storage['prev_mask'] = [ensure_float(m) for m in final_mask]
+        storage['count'] = storage.get('count', 0) + 1
+        storage['prev_x'] = x.detach().clone()
+        debug_print(f"  Stored {len(storage['prev_mask'])} mask values, count={storage['count']}")
         
-        # Store input for 'prev' loss mode
-        storage['prev_x'] = x.detach().clone()  # Store input tensor
+        # ==================== RETURN VALUES ====================
         
-        # ====================== RETURN VALUES ======================
+        debug_print("=" * 50)
+        debug_print("RETURN VALUE PREPARATION")
+        debug_print("=" * 50)
         
-        # Convert to learning rate values for each parameter
-        lr_values = []  # List to store mask values
+        debug_print("Converting box masks to parameter-level masks...")
+        lr_values = []
         for name, param in model.named_parameters():
-            # Check if parameter is trainable and in allowed layers
             if param.requires_grad and (trainable_layer_names is None or 
                                        get_clean_layer_name(name) in trainable_layer_names):
-                box_idx = param_to_box_idx.get(name, -1)  # Get box index
-                if box_idx >= 0 and box_idx < len(final_mask):  # If valid box
-                    lr_value = final_mask[box_idx].item()  # Get mask value
-                    lr_values.append(lr_value)  # Add to list
-                else:  # Not in any box
-                    lr_values.append(0.0)  # No update
+                box_idx = param_to_box_idx.get(name, -1)
+                if box_idx >= 0 and box_idx < len(final_mask):
+                    lr_value = final_mask[box_idx].item()
+                    lr_values.append(lr_value)
+                else:
+                    lr_values.append(0.0)
         
-        # Create info dict for tracking and debugging
+        debug_print(f"Created {len(lr_values)} parameter-level mask values")
+        
         info = {
             'best_loss': best_loss,
-            'mask_dict': {box_names[i]: final_mask[i].item() 
+            # FIX #4: Use ensure_float for consistent type in info dict
+            'mask_dict': {box_names[i]: ensure_float(final_mask[i]) 
                          for i in range(min(len(box_names), len(final_mask)))},
             'init_metrics': box_metrics,
+            'strategy': 'model_interpolation' if lls_variant['update'] else 'gradient_masking',
         }
         
-        debug_print(f"*** LLS OPTIMIZATION COMPLETE ***")
-        debug_print(f"Final best loss: {best_loss:.6f}")
-        debug_print(f"Final mask summary:")
+        debug_print("Info dictionary created:")
+        debug_print(f"  best_loss: {info['best_loss']:.6f}")
+        debug_print(f"  mask_dict: {len(info['mask_dict'])} boxes")
+        debug_print(f"  init_metrics: {len(info['init_metrics'])} boxes")
+        debug_print(f"  strategy: {info['strategy']}")
+        
+        debug_print("FINAL MASKS:")
         for i, box_name in enumerate(box_names):
             if i < len(final_mask):
-                debug_print(f"{box_name}: {final_mask[i].item():.6f}")
-        debug_print(f"========== LLS EXIT POINT ==========")
+                debug_print(f"  {box_name}: {final_mask[i].item():.6f}")
+        
+        active_params = sum(1 for v in lr_values if v > 0)
+        inactive_params = sum(1 for v in lr_values if v == 0)
+        debug_print(f"RETURN: {len(lr_values)} parameter masks, Active: {active_params}, Inactive: {inactive_params}")
+        
+        debug_print("=" * 80)
         
         return lr_values, info
         
@@ -1350,93 +1875,125 @@ def get_lls_masks(mask_algo, model, base_optimizer, iter_idx, trainable_layer_na
 
 def get_auto_rgn_values(param_groups):
     """Compute automatic Relative Gradient Norm (RGN) values.
-    
+    FIX: Handle case where no parameters have gradients (empty list).
+    If rgn_values is empty, torch.tensor([]).max() raises RuntimeError.
     Args:
         param_groups: Optimizer parameter groups
-        
     Returns:
-        torch.Tensor: RGN values for each parameter
+        torch.Tensor: RGN values for each parameter (empty tensor if no grads)
     """
-    # Compute the RGNs for each layer
-    rgn_values = []  # List to store RGN values
+    debug_print(f"get_auto_rgn_values ENTRY: {len(param_groups)} parameter groups")
     
-    # Loop through parameter groups
-    for group in param_groups:
-        for p in group['params']:  # Loop through parameters
-            if p.grad is None:  # Skip parameters without gradients
+    rgn_values = []
+    
+    for group_idx, group in enumerate(param_groups):
+        for p_idx, p in enumerate(group['params']):
+            if p.grad is None:
                 continue
-            grad_norm = p.grad.norm()  # Compute gradient norm
-            param_norm = p.norm()  # Compute parameter norm
-            rgn = grad_norm / (param_norm + 1e-8)  # Compute RGN with epsilon for stability
-            rgn_values.append(rgn)  # Add to list
+            grad_norm = p.grad.norm()
+            param_norm = p.norm()
+            rgn = grad_norm / (param_norm + 1e-8)
+            rgn_values.append(rgn)
 
-    # Normalize RGNs between 0 and 1
-    rgn_values = torch.tensor(rgn_values)  # Convert to tensor
-    # Normalize by maximum value
-    if rgn_values.max() > 0:  # Avoid division by zero
-        rgn_values = (rgn_values) / (rgn_values.max() + 1e-8)
+    # CRITICAL FIX #3: Handle empty list case
+    if len(rgn_values) == 0:
+        debug_print("get_auto_rgn_values: No parameters with gradients, returning empty tensor", force=True)
+        return torch.tensor([], dtype=torch.float32)
     
+    debug_print(f"  Computed {len(rgn_values)} RGN values")
+    
+    # FIX #6: Use torch.stack for semantic correctness
+    rgn_values = torch.stack(rgn_values)
+    
+    # Normalize by max - safe because tensor is non-empty
+    max_val = rgn_values.max()
+    if max_val > 0:
+        rgn_values = (rgn_values) / (max_val + 1e-8)
+        debug_print(f"  Normalized by max={max_val.item():.6f}")
+    else:
+        debug_print("  Warning: All RGN values are zero, no normalization applied", force=True)
+    
+    debug_print(f"get_auto_rgn_values RETURN: {len(rgn_values)} values")
     return rgn_values
-
 
 def get_auto_snr_values(param_groups):
     """Compute automatic Signal-to-Noise Ratio (SNR) values.
-    
+    FIX: Handle case where no parameters have gradients (empty list).
+    If snr_values is empty, subsequent operations will fail.
     Args:
         param_groups: Optimizer parameter groups
-        
     Returns:
-        torch.Tensor: SNR values for each parameter
+        torch.Tensor: SNR values for each parameter (empty tensor if no grads)
     """
-    # Compute the SNRs for each layer
-    snr_values = []  # List to store SNR values
+    debug_print(f"get_auto_snr_values ENTRY: {len(param_groups)} parameter groups")
     
-    # Loop through parameter groups
+    snr_values = []
+    
     for group in param_groups:
-        for p in group['params']:  # Loop through parameters
-            if p.grad is None:  # Skip parameters without gradients
+        for p in group['params']:
+            if p.grad is None:
                 continue
-            grad = p.grad  # Get gradient
-            # Compute SNR as squared gradient divided by variance
+            grad = p.grad
             snr = (grad*grad) / (torch.var(grad, dim=0, keepdim=True)+1e-8)
-            snr = snr.mean()  # Take mean
-            snr_values.append(snr)  # Add to list
+            snr = snr.mean()
+            snr_values.append(snr)
 
-    # Normalize SNRs between 0 and 1
-    snr_values = torch.tensor(snr_values)  # Convert to tensor
-    # Binarize based on threshold 0.95
+    # FIX #3: Handle empty list case
+    if len(snr_values) == 0:
+        debug_print("get_auto_snr_values: No parameters with gradients, returning empty tensor", force=True)
+        return torch.tensor([], dtype=torch.float32)
+    
+    debug_print(f"  Computed {len(snr_values)} SNR values")
+    
+    # FIX #6: Use torch.stack for semantic correctness
+    snr_values = torch.stack(snr_values)
+    
+    # Apply binarization threshold
     snr_values = torch.where(snr_values < 0.95,
                              torch.zeros_like(snr_values),
                              torch.ones_like(snr_values))
     
+    ones_count = (snr_values == 1).sum().item()
+    zeros_count = (snr_values == 0).sum().item()
+    debug_print(f"  Binarized: {ones_count} ones, {zeros_count} zeros")
+    
+    debug_print(f"get_auto_snr_values RETURN: {len(snr_values)} values")
     return snr_values
-
 
 def diff_lr_optimizer(base_optimizer):
     """Create a new optimizer with separate learning rate for each parameter.
-    
     Args:
         base_optimizer: Original optimizer
-        
     Returns:
         Optimizer: New optimizer with per-parameter learning rates
     """
-    # Get base optimizer parameters
-    base_opt_params = base_optimizer.defaults  # Get default parameters
-    base_lr = base_opt_params['lr']  # Get base learning rate
+    debug_print("diff_lr_optimizer ENTRY")
+    
+    base_opt_params = base_optimizer.defaults
+    base_lr = base_opt_params['lr']
+    debug_print(f"  Base optimizer: {type(base_optimizer).__name__}, base_lr={base_lr}")
 
-    # Create parameter list with individual learning rates
-    params = []  # List to store parameter dictionaries
-    for group in base_optimizer.param_groups:  # Loop through parameter groups
-        for p in group['params']:  # Loop through parameters
-            if p.grad is None:  # Skip parameters without gradients
-                continue
-            params.append({'params': p, 'lr': base_lr})  # Add parameter with base learning rate
+    params = []
+    total_params = 0
+    for group_idx, group in enumerate(base_optimizer.param_groups):
+        for p_idx, p in enumerate(group['params']):
+            # FIX: Wrap p in list to comply with PyTorch API
+            params.append({'params': [p], 'lr': base_lr})
+            total_params += 1
 
-    # Create new optimizer with same type and parameters
+    debug_print(f"  Created {len(params)} parameter groups for {total_params} parameters")
+    
     new_optimizer = type(base_optimizer)(params, **base_opt_params)
+    
+    # Verification: Ensure parameter count is preserved
+    new_param_count = sum(len(g['params']) for g in new_optimizer.param_groups)
+    if new_param_count != total_params:
+        error_msg = f"Parameter count mismatch: expected {total_params}, got {new_param_count}"
+        debug_print(f"diff_lr_optimizer ERROR: {error_msg}", force=True)
+        raise RuntimeError(error_msg)
+    
+    debug_print(f"diff_lr_optimizer RETURN: {type(new_optimizer).__name__} with {len(params)} param groups")
     return new_optimizer
-
 
 def diff_lr(base_optimizer, lr_factor_values):
     """Apply layer-specific learning rates to optimizer.
@@ -1445,19 +2002,25 @@ def diff_lr(base_optimizer, lr_factor_values):
         base_optimizer: Optimizer to modify
         lr_factor_values: List of learning rate scaling factors
     """
-    # Check if lists have same length
+    debug_print(f"diff_lr ENTRY: {len(base_optimizer.param_groups)} param groups, {len(lr_factor_values)} lr factors")
+    
     if len(base_optimizer.param_groups) != len(lr_factor_values):
         error_msg = f'Length mismatch: {len(lr_factor_values)} lr factors, {len(base_optimizer.param_groups)} param groups'
+        debug_print(f"diff_lr ERROR: {error_msg}", force=True)
         raise ValueError(error_msg)
     
-    # Get base learning rate
     base_lr = base_optimizer.defaults['lr']
+    debug_print(f"  Base learning rate: {base_lr}")
 
-    # Apply scaling factors to each parameter group
+    modified_count = 0
     for idx, group in enumerate(base_optimizer.param_groups):
-        # Scale learning rate by factor
         lr_layer = base_lr * lr_factor_values[idx]
-        group['lr'] = lr_layer  # Set new learning rate
+        group['lr'] = lr_layer
+        modified_count += 1
+        if idx < 3 or idx >= len(base_optimizer.param_groups) - 3:
+            debug_print(f"  Group {idx}: lr = {base_lr} * {lr_factor_values[idx]:.6f} = {lr_layer:.6f}")
+    
+    debug_print(f"diff_lr: Modified {modified_count} parameter groups")
 
 
 def compute_worst_mask(metric_values_dict, td_variant):
@@ -1470,18 +2033,23 @@ def compute_worst_mask(metric_values_dict, td_variant):
     Returns:
         dict: Dictionary of mask values for each box
     """
-    # Clone the metric_values_dict to mask_dict
+    debug_print(f"compute_worst_mask ENTRY: {len(metric_values_dict)} boxes")
+    
     mask_dict = copy.deepcopy(metric_values_dict)
 
-    # Worst case scenario: train the worst box
-    min_mask_value = min(mask_dict.values())  # Get minimum metric
+    min_mask_value = min(mask_dict.values())
+    debug_print(f"  Minimum metric value: {min_mask_value.item():.6f}")
     
+    selected_boxes = []
     for box_name, mask_value in mask_dict.items():
-        if mask_value == min_mask_value:  # If this is the worst box
-            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)  # Set to 1
-        else:  # Not the worst box
-            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)  # Set to 0
-
+        if mask_value == min_mask_value:
+            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)
+            selected_boxes.append(box_name)
+        else:
+            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)
+    
+    debug_print(f"  Selected worst boxes: {selected_boxes}")
+    debug_print(f"compute_worst_mask RETURN: {len(mask_dict)} masks")
     return mask_dict
 
 
@@ -1495,23 +2063,32 @@ def compute_not_best_mask(metric_values_dict, td_variant):
     Returns:
         dict: Dictionary of mask values for each box
     """
-    # Clone the metric_values_dict to mask_dict
+    debug_print(f"compute_not_best_mask ENTRY: {len(metric_values_dict)} boxes")
+    
     mask_dict = copy.deepcopy(metric_values_dict)
 
-    # Train all boxes except the best one
-    max_mask_value = max(mask_dict.values())  # Get maximum metric
+    max_mask_value = max(mask_dict.values())
+    debug_print(f"  Maximum metric value: {max_mask_value.item():.6f}")
     
-    # Check if this is the first sample (all metrics equal)
     metrics_sum = sum(v.item() for v in mask_dict.values())
     first_sample_in_window = abs(metrics_sum - len(mask_dict)) < 1e-6
     
+    if first_sample_in_window:
+        debug_print("  First sample in window detected, keeping all boxes")
+    
+    selected_boxes = []
+    excluded_boxes = []
     for box_name, mask_value in mask_dict.items():
-        # Train box if it's not the best or this is the first sample
         if mask_value != max_mask_value or first_sample_in_window:
-            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)  # Set to 1
-        else:  # Best box (unless first sample)
-            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)  # Set to 0
-
+            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)
+            selected_boxes.append(box_name)
+        else:
+            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)
+            excluded_boxes.append(box_name)
+    
+    debug_print(f"  Selected boxes (not best): {selected_boxes}")
+    debug_print(f"  Excluded boxes (best): {excluded_boxes}")
+    debug_print(f"compute_not_best_mask RETURN: {len(mask_dict)} masks")
     return mask_dict
 
 
@@ -1525,20 +2102,21 @@ def compute_random_mask(metric_values_dict, td_variant):
     Returns:
         dict: Dictionary of mask values for each box
     """
-    # Clone the metric_values_dict to mask_dict
+    debug_print(f"compute_random_mask ENTRY: {len(metric_values_dict)} boxes")
+    
     mask_dict = copy.deepcopy(metric_values_dict)
 
-    # Choose a random box to train
-    box_names = list(mask_dict.keys())  # Get box names
-    random_box = random.choice(box_names)  # Random box name
+    box_names = list(mask_dict.keys())
+    random_box = random.choice(box_names)
+    debug_print(f"  Randomly selected box: {random_box}")
 
-    # Train only the random box
     for box_name, mask_value in mask_dict.items():
-        if box_name == random_box:  # If this is the chosen box
-            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)  # Set to 1
-        else:  # Not the chosen box
-            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)  # Set to 0
+        if box_name == random_box:
+            mask_dict[box_name] = torch.tensor(1.0, device=mask_value.device)
+        else:
+            mask_dict[box_name] = torch.tensor(0.0, device=mask_value.device)
 
+    debug_print(f"compute_random_mask RETURN: {len(mask_dict)} masks")
     return mask_dict
 
 
@@ -1553,15 +2131,18 @@ def get_box_masks(mask_algo, model, trainable_layer_names):
     Returns:
         list: List of mask values for each parameter
     """
-    # Compute mask for each specified box
-    # Extract box names from mask_algo string
+    debug_print(f"get_box_masks ENTRY: mask_algo='{mask_algo}'")
+    
     parts = mask_algo.lower().split('_')
     box_parts = [part for part in parts if 'layer' in part or 'stage' in part]
     
+    debug_print(f"  Extracted box parts: {box_parts}")
+    
     mask_dict = {box_name: 1 for box_name in box_parts}
+    debug_print(f"  Created mask_dict with {len(mask_dict)} boxes set to 1")
 
-    # Get mask values for each layer
     mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
+    debug_print(f"get_box_masks RETURN: {len(mask_values)} mask values")
     return mask_values
 
 
@@ -1574,23 +2155,30 @@ def get_es_variant(mask_algo):
     Returns:
         dict: Dictionary of early stopping configuration options
     """
-    # Create td hparams dictionary with default values
-    td_variant = {
-        'pat'       : '5',      # Early stopping patience: 0, 3, 5, 10
-        'type'      : 'hard',   # Early stopping type: hard, soft
-        'dataset'   : 'ood',    # Early stopping set: iid, ood
-        'lvl'       : 'Block',  # Early stopping granularity: Layer, Block, Subblock
-    }
-
-    # Update the td hparams dictionary with the given hyperparameters
-    for hparam in mask_algo.split('_'):  # Split by underscore
-        if ':' in hparam:  # Check if it's a key-value pair
-            key, value = hparam.split(':')  # Split into key and value
-            if key not in td_variant:  # Check if key is valid
-                error_msg = f'Invalid mask_hparam: {key}'
-                raise ValueError(error_msg)
-            td_variant[key] = value.lower()  # Update configuration value
+    debug_print(f"get_es_variant ENTRY: mask_algo='{mask_algo}'")
     
+    td_variant = {
+        'pat'       : '5',
+        'type'      : 'hard',
+        'dataset'   : 'ood',
+        'lvl'       : 'Block',
+    }
+    
+    debug_print(f"  Default config: {td_variant}")
+
+    hparam_count = 0
+    for hparam in mask_algo.split('_'):
+        if ':' in hparam:
+            key, value = hparam.split(':')
+            if key not in td_variant:
+                error_msg = f'Invalid mask_hparam: {key}'
+                debug_print(f"get_es_variant ERROR: {error_msg}", force=True)
+                raise ValueError(error_msg)
+            td_variant[key] = value.lower()
+            hparam_count += 1
+            debug_print(f"  Parsed {key}={value.lower()}")
+    
+    debug_print(f"get_es_variant RETURN: parsed {hparam_count} hyperparameters, final config = {td_variant}")
     return td_variant
 
 
@@ -1608,113 +2196,122 @@ def get_valid_mask(mask_algo, model, base_optimizer, iter_idx, trainable_layer_n
     Returns:
         tuple: (mask values, info dictionary)
     """
-    global stop_flag_dict, min_loss_dict, steps_no_improve_dict  # Use global variables
+    global stop_flag_dict, min_loss_dict, steps_no_improve_dict
 
-    ### Prepare everything
-    # Get the es variant
-    es_variant = get_es_variant(mask_algo)  # Parse configuration
-    es_variant['iter_idx'] = iter_idx  # Set iteration index
+    debug_print("=" * 60)
+    debug_print("GET_VALID_MASK ENTRY")
+    debug_print(f"  mask_algo: '{mask_algo}', iter_idx: {iter_idx}")
+
+    es_variant = get_es_variant(mask_algo)
+    es_variant['iter_idx'] = iter_idx
     
-    # Get all the block names
-    granularity = es_variant['lvl']  # Get granularity
-    box_names = get_all_param_name_list(model, granularity)  # Get box names
+    granularity = es_variant['lvl']
+    box_names = get_all_param_name_list(model, granularity)
+    debug_print(f"  Found {len(box_names)} boxes at '{granularity}' level")
 
-    # Initialize stop flags for first iteration
     if iter_idx == 0:
         stop_flag_dict = {box_name: False for box_name in box_names}
+        debug_print("  Initialized stop_flag_dict (iter_idx=0)")
 
-    # Get the data loader for the validation set
-    if es_variant['dataset'] == 'iid':  # IID validation set
+    if es_variant['dataset'] == 'iid':
         if 'iidte_loader' not in kwargs:
             error_msg = "iidte_loader not found in kwargs"
+            debug_print(f"get_valid_mask ERROR: {error_msg}", force=True)
             raise ValueError(error_msg)
-        loader = kwargs['iidte_loader']  # Get loader
-    elif es_variant['dataset'] == 'ood':  # OOD validation set
+        loader = kwargs['iidte_loader']
+        debug_print("  Using IID validation loader")
+    elif es_variant['dataset'] == 'ood':
         if 'oodte_loader' not in kwargs:
             error_msg = "oodte_loader not found in kwargs"
+            debug_print(f"get_valid_mask ERROR: {error_msg}", force=True)
             raise ValueError(error_msg)
-        loader = kwargs['oodte_loader']  # Get loader
+        loader = kwargs['oodte_loader']
+        debug_print("  Using OOD validation loader")
 
-    # Log intermediate results
     info = {
-        'valid_loss_dict': {}  # Dictionary to store validation losses
+        'valid_loss_dict': {}
     }
 
-    # Copy all the current model parameters and gradients
-    all_curr_params_dict, all_curr_grads_dict = {}, {}  # Store current state
+    debug_print("  Saving current model state...")
+    all_curr_params_dict, all_curr_grads_dict = {}, {}
     for name, params in model.named_parameters():
-        all_curr_params_dict[name] = params.data.clone()  # Copy parameter
-        if params.grad is None:  # If no gradient
-            all_curr_grads_dict[name] = None  # Store None
-        else:  # If gradient exists
-            all_curr_grads_dict[name] = params.grad.clone()  # Copy gradient
+        all_curr_params_dict[name] = params.data.clone()
+        if params.grad is None:
+            all_curr_grads_dict[name] = None
+        else:
+            all_curr_grads_dict[name] = params.grad.clone()
     
-    ### Simulate the optimizer step and get mask dict
-    mask_dict = {}  # Dictionary to store masks
+    mask_dict = {}
     
-    # Process each box
-    for box_name in box_names:
-        # No need to check for early stopping if already stopped
+    for box_idx, box_name in enumerate(box_names):
+        debug_print(f"  Processing box {box_idx+1}/{len(box_names)}: '{box_name}'")
+        
         if es_variant['type'] == 'hard' and stop_flag_dict[box_name] == True:
-            mask_dict[box_name] = 0  # Don't update this box
+            mask_dict[box_name] = 0
+            debug_print(f"    Box already stopped, mask=0")
             continue
 
-        # Get the parameter list for optimizer step (without cloning)
-        temp_params_list = []  # List to store parameters for temp optimizer
+        temp_params_list = []
         
-        # Loop through model parameters
         for idx, (name, params) in enumerate(model.named_parameters()):
-            # Check if parameter is trainable
             trainable_layer = is_layer_trainable(name, trainable_layer_names)
             if params.requires_grad == True and trainable_layer:
-                if box_name in name:  # If parameter belongs to this box
-                    temp_params_list.append(params)  # Add to temp parameters
+                if box_name in name:
+                    temp_params_list.append(params)
 
-        # Get the base optimizer's parameters
-        base_opt_params = copy.deepcopy(base_optimizer.defaults)  # Copy optimizer settings
+        debug_print(f"    Found {len(temp_params_list)} parameters for this box")
 
-        # Temporary optimizer step for the model
+        base_opt_params = copy.deepcopy(base_optimizer.defaults)
+
         temp_optimizer = type(base_optimizer)(temp_params_list, **base_opt_params)
-        temp_optimizer.step()  # Perform update step
-
-        # Get the loss for the validation set
-        sup_loss = 0  # Initialize loss
-        device = next(model.parameters()).device  # Get device
         
-        # Compute validation loss
-        count = 0  # Counter for number of batches
-        with torch.no_grad():  # No gradients needed
-            for x, y in loader:  # Loop through validation batches
-                x = x.to(device)  # Move input to device
-                y = y.to(device)  # Move target to device
-                p = model(x)  # Forward pass
-                batch_loss = F.cross_entropy(p, y).item()  # Compute batch loss
-                sup_loss += batch_loss  # Add batch loss
-                count += 1  # Increment batch counter
+        # FIX #1: Guard against missing gradients (same as get_LEAST_masks)
+        has_grad = any(p.grad is not None for p in temp_params_list)
+        if not has_grad:
+            debug_print("VALID ERROR: No gradients on parameters. Call backward() before layer selection.", force=True)
+            raise RuntimeError(
+                "Validation-based layer selection requires gradients. "
+                "Ensure loss.backward() is called before get_new_optimizer()."
+            )
         
-        if count > 0:  # If we have batches
-            sup_loss /= count  # Average loss
+        temp_optimizer.step()
 
-        # Check for early stopping
+        sup_loss = 0
+        device = next(model.parameters()).device
+        
+        count = 0
+        with torch.no_grad():
+            for x, y in loader:
+                x = x.to(device)
+                y = y.to(device)
+                p = model(x)
+                batch_loss = F.cross_entropy(p, y).item()
+                sup_loss += batch_loss
+                count += 1
+        
+        if count > 0:
+            sup_loss /= count
+        
+        debug_print(f"    Validation loss: {sup_loss:.6f} (from {count} batches)")
+
         stop_flag = early_stopping_with_loss(
             sup_loss, int(es_variant['pat']), iter_idx, box_name)
         
-        # Store flags and losses
-        stop_flag_dict[box_name] = stop_flag  # Update stop flag
-        info['valid_loss_dict'][box_name] = sup_loss  # Store loss
+        stop_flag_dict[box_name] = stop_flag
+        info['valid_loss_dict'][box_name] = sup_loss
 
-        # Compute mask for box
-        mask_dict[box_name] = 1 if stop_flag == False else 0  # 1 if not stopped, 0 if stopped
+        mask_dict[box_name] = 1 if stop_flag == False else 0
+        debug_print(f"    Stop flag: {stop_flag}, Mask: {mask_dict[box_name]}")
 
-        # Restore all the current model's parameters and grads
         for name, params in model.named_parameters():
-            params.data = all_curr_params_dict[name]  # Restore parameter
-            params.grad = all_curr_grads_dict[name]  # Restore gradient
+            params.data = all_curr_params_dict[name]
+            params.grad = all_curr_grads_dict[name]
 
-    # Get mask values for each layer
     mask_values = get_mask_values(mask_dict, model, trainable_layer_names)
-    info['mask_dict'] = mask_dict  # Store masks in info
+    info['mask_dict'] = mask_dict
 
+    debug_print(f"GET_VALID_MASK RETURN: {len(mask_values)} mask values")
+    debug_print("=" * 60)
     return mask_values, info
 
 
@@ -1730,24 +2327,25 @@ def early_stopping_with_loss(loss, patience, iter_idx, box_name):
     Returns:
         bool: True if should stop, False otherwise
     """
-    global min_loss_dict, steps_no_improve_dict  # Use global dictionaries
+    global min_loss_dict, steps_no_improve_dict
 
-    # If the first step
-    if iter_idx == 0:  # First iteration
-        min_loss_dict[box_name] = float('inf')  # Initialize minimum loss
-        steps_no_improve_dict[box_name] = 0  # Initialize steps counter
+    if iter_idx == 0:
+        min_loss_dict[box_name] = float('inf')
+        steps_no_improve_dict[box_name] = 0
+        debug_print(f"early_stopping_with_loss: Initialized for '{box_name}'")
 
-    # If the validation loss is at a minimum
-    if loss <= min_loss_dict[box_name]:  # If loss improved
-        min_loss_dict[box_name] = loss  # Update minimum loss
-        steps_no_improve_dict[box_name] = 0  # Reset counter
-    else:  # Loss didn't improve
-        steps_no_improve_dict[box_name] += 1  # Increment counter
-        # Check early stopping condition
-        if steps_no_improve_dict[box_name] > patience:  # If patience exceeded
-            return True  # Should stop
+    if loss <= min_loss_dict[box_name]:
+        min_loss_dict[box_name] = loss
+        steps_no_improve_dict[box_name] = 0
+        debug_print(f"early_stopping_with_loss: '{box_name}' improved to {loss:.6f}")
+    else:
+        steps_no_improve_dict[box_name] += 1
+        debug_print(f"early_stopping_with_loss: '{box_name}' no improvement ({steps_no_improve_dict[box_name]}/{patience})")
+        if steps_no_improve_dict[box_name] > patience:
+            debug_print(f"early_stopping_with_loss: '{box_name}' STOPPING (patience exceeded)")
+            return True
         
-    return False  # Should continue
+    return False
 
 
 def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_names=None, track_flag=False, **kwargs):
@@ -1766,85 +2364,92 @@ def get_new_optimizer(mask_algo, model, optimizer, iter_idx, trainable_layer_nam
         optimizer: Modified optimizer with layer-specific learning rates
         info: (optional) Dictionary with diagnostic information
     """
-    
-    debug_print("========== GET_NEW_OPTIMIZER ENTRY ==========")
-    debug_print(f"mask_algo: {mask_algo}, iter_idx: {iter_idx}")
-    debug_print(f"track_flag: {track_flag}")
+    debug_print("=" * 80)
+    debug_print("GET_NEW_OPTIMIZER ENTRY")
+    debug_print(f"  mask_algo: '{mask_algo}'")
+    debug_print(f"  iter_idx: {iter_idx}")
+    debug_print(f"  track_flag: {track_flag}")
+    debug_print(f"  trainable_layer_names: {trainable_layer_names}")
+    debug_print(f"  kwargs keys: {list(kwargs.keys())}")
     
     try:
-        info = {}  # Dictionary for tracking info
-        new_opt_flag = False  # Flag for optimizer modification
+        info = {}
+        new_opt_flag = False
 
-        # Clean trainable layer names if provided
         if trainable_layer_names is not None:
+            original_count = len(trainable_layer_names)
             trainable_layer_names = [get_clean_layer_name(name) for name in trainable_layer_names]
+            debug_print(f"  Cleaned {original_count} trainable layer names")
         
-        # Choose layer selection method based on mask_algo
-        # IMPORTANT: Check LLS first with startswith to avoid substring matching issues
-        if mask_algo.lower().startswith('lls'):  # LLS method - CHECK FIRST
-            # CONSERVATIVE DEBUG: Confirm LLS method detection and parameter passing
-            debug_print(f"[METHOD] *** LLS METHOD DETECTED *** mask_algo='{mask_algo}'", force=True)
-            # Check for required input tensor
+        # Determine which method to use based on mask_algo
+        mask_algo_lower = mask_algo.lower()
+        debug_print(f"  Determining method from: '{mask_algo_lower}'")
+        
+        if mask_algo_lower.startswith('lls'):
+            # LLS method
+            debug_print("  Detected LLS method")
             if 'x' not in kwargs:
                 error_msg = "Input tensor 'x' is required for LLS but not provided"
                 print(error_msg)
                 raise ValueError(error_msg)
-            debug_print("Input tensor confirmed, calling get_lls_masks...")
-            # Get LLS masks
             mask_values, info = get_lls_masks(mask_algo, model, optimizer, iter_idx, 
                                               trainable_layer_names, **kwargs)
             new_opt_flag = True
-            debug_print("LLS call returned successfully")
-        elif mask_algo.lower().startswith('least'):  # LEAST method - CHECK SECOND
-            debug_print("Using LEAST layer selection")
+        elif mask_algo_lower.startswith('least'):
+            # LEAST method
+            debug_print("  Detected LEAST method")
             mask_values, info = get_LEAST_masks(mask_algo, model, optimizer, iter_idx, 
                                                 trainable_layer_names, track_flag=True, **kwargs)
             new_opt_flag = True
-        elif 'layer' in mask_algo.lower() or 'stage' in mask_algo.lower():  # Explicit layer selection
-            debug_print("Using explicit layer selection")
+        elif 'layer' in mask_algo_lower or 'stage' in mask_algo_lower:
+            # Explicit layer selection
+            debug_print("  Detected explicit layer selection")
             mask_values = get_box_masks(mask_algo, model, trainable_layer_names)
             new_opt_flag = True
-        elif 'valid' in mask_algo.lower():  # Validation-based selection
-            debug_print("Using validation-based layer selection")
+        elif 'valid' in mask_algo_lower:
+            # Validation-based selection
+            debug_print("  Detected validation-based selection")
             mask_values, info = get_valid_mask(mask_algo, model, optimizer, iter_idx, 
                                                trainable_layer_names, **kwargs)
             new_opt_flag = True
-        elif 'autorgn' in mask_algo.lower():  # Automatic RGN-based selection
-            debug_print("Using automatic RGN-based layer selection")
+        elif 'autorgn' in mask_algo_lower:
+            # Automatic RGN-based selection
+            debug_print("  Detected AutoRGN method")
             mask_values = get_auto_rgn_values(optimizer.param_groups)
             new_opt_flag = True
-        elif 'autosnr' in mask_algo.lower():  # Automatic SNR-based selection
-            debug_print("Using automatic SNR-based layer selection")
+        elif 'autosnr' in mask_algo_lower:
+            # Automatic SNR-based selection
+            debug_print("  Detected AutoSNR method")
             mask_values = get_auto_snr_values(optimizer.param_groups)
             new_opt_flag = True
         else:
-            debug_print(f"No layer selection method identified in: {mask_algo}")
+            # No layer selection method identified
+            debug_print("  No layer selection method detected, returning original optimizer")
             if track_flag:
                 return optimizer, info
             else:
                 return optimizer
 
-        # Apply layer-specific learning rates if needed
+        # Apply layer-specific learning rates
         if new_opt_flag:
-            debug_print("Applying layer-specific learning rates...")
-            # Create per-parameter optimizer if needed
+            debug_print(f"  Applying {len(mask_values)} layer-specific learning rates")
+            
             if len(optimizer.param_groups) == 1:
+                debug_print("  Optimizer has single param group, creating diff_lr_optimizer")
                 optimizer = diff_lr_optimizer(optimizer)
+            else:
+                debug_print(f"  Optimizer has {len(optimizer.param_groups)} param groups, using as-is")
             
-            # Apply layer-specific learning rates
             diff_lr(optimizer, mask_values)
-            
-            # Print final learning rates summary (first few only)
-            if len(optimizer.param_groups) > 0:
-                sample_size = min(3, len(optimizer.param_groups))
-                lr_sample = [f"{g['lr']:.6f}" for g in optimizer.param_groups[:sample_size]]
-                debug_print(f"Sample learning rates: {lr_sample} (total: {len(optimizer.param_groups)} groups)")
+            debug_print("  Successfully applied differential learning rates")
 
-        # Return optimizer and info based on track_flag
-        debug_print("========== GET_NEW_OPTIMIZER EXIT ==========")
         if track_flag:
+            debug_print(f"GET_NEW_OPTIMIZER RETURN: optimizer + info (keys: {list(info.keys())})")
+            debug_print("=" * 80)
             return optimizer, info
         else:
+            debug_print("GET_NEW_OPTIMIZER RETURN: optimizer only")
+            debug_print("=" * 80)
             return optimizer
             
     except Exception as e:
