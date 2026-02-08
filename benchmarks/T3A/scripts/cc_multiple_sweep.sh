@@ -1,20 +1,20 @@
 #!/bin/bash
-#SBATCH --gres=gpu:4            # Request GPU "generic resources"
-#SBATCH --cpus-per-task=8      # Refer to cluster's documentation for the right CPU/GPU ratio
-#SBATCH --mem=128000M            # Memory proportional to GPUs: 32000 Cedar, 47000 Béluga, 64000 Graham.
-#SBATCH --time=0-12:00:00       # DD-HH:MM:SS (# hours for proper coverage)
-#SBATCH --array=0-7          # 8 jobs
-#SBATCH --output=/home/saby/scratch/Suryansh/out/estta/sweep/benchmarking/fdb/run1/slurm-%A_%a.out
-#SBATCH --error=/home/saby/scratch/Suryansh/out/estta/sweep/benchmarking/fdb/run1/slurm-%A_%a.err
-
+#SBATCH --gpus=a100_2g.10gb:1
+#SBATCH --cpus-per-task=4       # Adjusted for 2g MiG limits
+#SBATCH --mem=40000M             # Adjusted for 2g MiG limits
+#SBATCH --time=0-32:00:00       # DD-HH:MM:SS (# hours for proper coverage)
+#SBATCH --array=0-11          # 8 jobs
+#SBATCH --output=/home/saby/scratch/Suryansh/out/estta/sweep/tdbrandomsearch/slurm-%A_%a.out
+#SBATCH --error=/home/saby/scratch/Suryansh/out/estta/sweep/tdbrandomsearch/slurm-%A_%a.err
 # sbatch --dependency=afterok:<prev_job_id> cc_multiple_sweep.sh
 nvidia-smi
+
 # -----------------------------------------------------------------------------------
 # TDB MODE CONFIGURATION
 # -----------------------------------------------------------------------------------
 # Set to 'true' for Tiny DomainBed mode (faster experiments with subset of environments)
 # Set to 'false' for full experiments
-TDB_MODE=false  # Change this to 'true' to enable TDB mode
+TDB_MODE=true  # Change this to 'true' to enable TDB mode
 
 # -----------------------------------------------------------------------------------
 # Define run parameters as bash arrays
@@ -22,7 +22,7 @@ TDB_MODE=false  # Change this to 'true' to enable TDB mode
 # SWEEP_MODE=launch
 SWEEP_MODE=unsupervised_adaptation
 
-DATASETS=(PACS VLCS TerraIncognita OfficeHome)
+DATASETS=(TerraIncognita VLCS PACS)
 BACKBONES=(resnet18-BN)
 DG_ALGOS=(ERM)
 MARKS=(0)
@@ -31,7 +31,10 @@ if [ "$SWEEP_MODE" = "unsupervised_adaptation" ]; then
     TTA_ALGOS=(PseudoLabel SHOT)
 
     # First run: update, lr, and ema configurations
-    FIND_ALGOS=(LLS_init:least_reg:none)
+    FIND_ALGOS=(
+  LEAST
+  LLS_init:least_steps:10_lr:0.015_loss:prev_patience:1_reg:l2_regstr:0.22_appl:ema_emalr:0.4_bnd:clip_lvl:block_bin:1_nbox:1_mthr:0.5_update
+)
     FIX_ALGOS=(Difflr)
     GRANULARITIES=(Layer)
 
@@ -139,7 +142,7 @@ N_TRIALS_FROM=$((N_TRIALS_FROM + MARK))
 # Set sweep folder names and paths - UPDATED FOR YOUR SETUP
 # -----------------------------------------------------------------------------------
 SWEEP_NAME=${DATASET}_${BACKBONE}_${DG_ALGO}_${MARK}
-CMD_LAUNCH=multi_gpu
+CMD_LAUNCH=local
 
 HOME_PATH=/home/saby
 DATA_DIR=${HOME_PATH}/scratch/Suryansh/data
@@ -228,6 +231,24 @@ echo "__________________________]"
 # Set TDB environment variable
 export TDB_ONLY=${TDB_MODE}
 echo "TDB_ONLY environment variable set to: ${TDB_ONLY}"
+
+# ============================================================================
+# FIX: Convert MIG UUID to device index for PyTorch compatibility
+# ============================================================================
+# SLURM sets CUDA_VISIBLE_DEVICES to MIG UUID format which Compute Canada's
+# PyTorch build cannot handle properly, causing hangs during CUDA initialization.
+# The MIG instance is visible as device 0, so we convert the UUID to index 0.
+if [[ "${CUDA_VISIBLE_DEVICES}" == MIG-* ]]; then
+    echo ""
+    echo "=== MIG UUID Fix ==="
+    echo "Detected MIG UUID format: ${CUDA_VISIBLE_DEVICES}"
+    echo "Converting to device index 0 for PyTorch compatibility"
+    export CUDA_VISIBLE_DEVICES=0
+    echo "CUDA_VISIBLE_DEVICES now set to: ${CUDA_VISIBLE_DEVICES}"
+    echo "===================="
+    echo ""
+fi
+# ============================================================================
 
 # Run command
 cd ${CODE_PATH}
