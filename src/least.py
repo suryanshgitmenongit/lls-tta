@@ -1,5 +1,5 @@
 # least.py - Layer selection algorithm for test-time adaptation 
-
+# Fixed version with optimizer momentum accumulation and comprehensive debug verification
 import torch
 import torchvision
 import torch.nn as nn
