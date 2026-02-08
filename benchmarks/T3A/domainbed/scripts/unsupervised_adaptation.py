@@ -1,4 +1,34 @@
 # The code is modified from domainbed.scripts.train
+# ==============================================================================
+# COMPLETE FIXED VERSION - All Oracle HP Selection Bugs Resolved
+# ==============================================================================
+# This is the COMPLETE script with ALL bug fixes applied:
+# 
+# BUG FIX #2: Cache validation in get_best_hp() (lines ~430-530)
+#   - CRITICAL FIX: Extracts ALL configs from entire hparams_list
+#   - Previous version only checked hparams_list[0], missing other configs
+#   - Now correctly validates multi-config oracle runs
+#   - Prevents contamination from old runs with different layer selection configs
+#   - Deletes invalid cache files automatically
+#
+# BUG FIX #3: File mode logic (lines ~1280-1290)
+#   - Always overwrites for first config (hp_idx == 0)
+#   - Prevents contamination from old result files
+#
+# BUG FIX #4: Results file hp_mode suffix (lines ~1270-1280)
+#   - Adds _orc or _iid suffix to separate oracle/iid results
+#   - Prevents file contamination between HP selection modes  
+#
+# BUG FIX #7: Consistent loc_alg_name (lines ~37-57, 588-605)
+#   - Always uses base method name (LEAST, LLS) regardless of mode
+#   - Ensures consistent file naming between oracle and manual modes
+#   - Works correctly for single config oracle submissions
+#
+# BUG FIX #9: Parallel execution support via oracle_exp_id (lines ~588, 625, 1282)
+#   - Adds optional --oracle_exp_id parameter for parallel oracle runs
+#   - Prevents file collisions when running multiple experiments simultaneously
+#   - Includes exp_id in filenames and results JSON
+# ==============================================================================
 
 import argparse
 from argparse import Namespace
@@ -38,6 +68,32 @@ from domainbed import model_selection
 from domainbed.lib.query import Q
 from domainbed import adapt_algorithms
 import itertools
+
+
+def get_base_method_name(find_algo_str):
+    """Extract base method name from find_algo string for file naming.
+    
+    Handles comma-separated lists by taking the first config.
+    Extracts base name before first underscore, with special handling for LLS_init:least.
+    
+    Examples:
+        'LEAST_sz:5_mthr:0.5_lvl:Layer' -> 'LEAST'
+        'LLS_init:least_steps:10_lr:0.01_...' -> 'LLS'
+        'LEAST,LEAST_sz:5...' -> 'LEAST'
+    """
+    # If comma-separated, take first
+    if ',' in find_algo_str:
+        find_algo_str = find_algo_str.split(',')[0].strip()
+    
+    # Handle special case: LLS_init:least should return 'LLS'
+    if find_algo_str.startswith('LLS'):
+        return 'LLS'
+    
+    # Extract base name before first underscore
+    if '_' in find_algo_str:
+        return find_algo_str.split('_')[0]
+    
+    return find_algo_str
 
 # Default is True, set to False during debugging
 PRODN=True
@@ -503,67 +559,226 @@ def accuracy_ent_track(network, oodtr_evals, oodte_evals, iidte_evals, device, c
 
 
 def get_best_hp(evals_list, hparams_list, hp_idx):
-        best_acc = -1
-        best_hparams = {}
+    """
+    Select best hyperparameters by evaluating all configs on validation data.
+    
+    ===========================================================================
+    CRITICAL BUG FIX #2: Cache validation prevents contamination
+    ===========================================================================
+    FINAL FIX: Extracts ALL unique find_algos from ENTIRE hparams_list.
+    
+    Previous broken version only checked hparams_list[0]['find_algo'], which:
+    - Worked for single-config (all hparams have same find_algo)
+    - FAILED for multi-config oracle (each hparams has different find_algo)
+    
+    Example of the bug:
+      hparams_list = [
+          {'alpha': 0.1, 'find_algo': "LEAST_sz:5"},   # hparams_list[0]
+          {'alpha': 1.0, 'find_algo': "LEAST_sz:5"},
+          {'alpha': 0.1, 'find_algo': "LEAST_sz:20"},  # Different!
+          {'alpha': 1.0, 'find_algo': "LEAST_sz:20"},
+      ]
+      Old code: current_find_algos = {"LEAST_sz:5"}  # Only first!
+      New code: current_find_algos = {"LEAST_sz:5", "LEAST_sz:20"}  # All!
+    
+    This now correctly validates multi-config oracle runs and prevents 
+    contamination from old runs with different layer selection methods.
+    ===========================================================================
+    """
+    best_acc = -1
+    best_hparams = {}
 
-        track_path = os.path.join(args.output_dir, 'hpSearch_{}_{}_ord{}_{}.jsonl'.format(alg_name, loc_alg_name, CONST_ORDER, hp_idx))
-        if os.path.exists(track_path) and RESUSE_BEST_HP:
-            adapt_hparams_keys = list(hparams_list[0].keys()) + ['hp_acc']
-            with open(track_path, 'r') as f:
-                for line in f:
+    track_path = os.path.join(args.output_dir, 
+                              'hpSearch_{}_{}_ord{}_{}.jsonl'.format(
+                                  alg_name, loc_alg_name, CONST_ORDER, hp_idx))
+    
+    # ========================================================================
+    # CRITICAL FIX: Validate cache before reuse
+    # ========================================================================
+    if os.path.exists(track_path) and RESUSE_BEST_HP:
+        print(f"[CACHE] Found existing hpSearch file: {os.path.basename(track_path)}")
+        
+        # ====================================================================
+        # CRITICAL BUG FIX: Extract ALL configs from ENTIRE hparams_list
+        # ====================================================================
+        # Iterate through ALL hparams to collect every unique find_algo value
+        # This handles both single-config and multi-config oracle correctly
+        # ====================================================================
+        all_find_algos = set()
+        for hp in hparams_list:
+            fa = hp.get('find_algo')
+            if isinstance(fa, list):
+                # If it's a list, add all elements
+                all_find_algos.update(fa)
+            elif fa:
+                # If it's a string, add it
+                all_find_algos.add(fa)
+        
+        current_find_algos = all_find_algos
+        print(f"[CACHE] Current run testing {len(current_find_algos)} unique configs:")
+        for i, cfg in enumerate(sorted(current_find_algos), 1):
+            print(f"  [{i}] {cfg}")
+        
+        adapt_hparams_keys = list(hparams_list[0].keys()) + ['hp_acc']
+        cache_valid = True
+        cache_line_count = 0
+        cached_configs_found = set()
+        
+        with open(track_path, 'r') as f:
+            for line_num, line in enumerate(f):
+                if not line.strip():
+                    continue
+                    
+                cache_line_count += 1
+                
+                try:
                     # Read the hparams and acc into a dict
                     hparams_results = json.loads(line[:-1])
-                    
-                    # Check if all the necessary keys are in the hparams
-                    assert all([k in hparams_results.keys() for k in adapt_hparams_keys])
-                    
-                    # Get the necessary hparams and acc
-                    adapt_hparams = {k: v for k, v in hparams_results.items() if k in adapt_hparams_keys}
-                    mean_acc = hparams_results['hp_acc']
+                except json.JSONDecodeError as e:
+                    print(f"[CACHE INVALID] Line {line_num}: JSON decode error: {e}")
+                    cache_valid = False
+                    break
+                
+                # VALIDATION STEP 1: Check required keys exist
+                missing_keys = [k for k in adapt_hparams_keys if k not in hparams_results.keys()]
+                if missing_keys:
+                    print(f"[CACHE INVALID] Line {line_num}: Missing keys: {missing_keys}")
+                    cache_valid = False
+                    break
+                
+                # VALIDATION STEP 2: Check find_algo is in current run's config set
+                cached_find_algo = hparams_results.get('find_algo')
+                
+                # Normalize to string for comparison
+                if isinstance(cached_find_algo, list):
+                    if len(cached_find_algo) == 1:
+                        cached_find_algo_str = cached_find_algo[0]
+                    else:
+                        print(f"[CACHE INVALID] Line {line_num}: Unexpected list length: {len(cached_find_algo)}")
+                        cache_valid = False
+                        break
+                elif isinstance(cached_find_algo, str):
+                    cached_find_algo_str = cached_find_algo
+                else:
+                    print(f"[CACHE INVALID] Line {line_num}: Unexpected find_algo type: {type(cached_find_algo)}")
+                    cache_valid = False
+                    break
+                
+                # Check if this cached config is in our current set
+                if cached_find_algo_str not in current_find_algos:
+                    print(f"[CACHE INVALID] Line {line_num}: Config not in current run!")
+                    print(f"  Cached config: {cached_find_algo_str}")
+                    print(f"  Current configs: {sorted(current_find_algos)}")
+                    cache_valid = False
+                    break
+                
+                # Track which configs we've seen in cache
+                cached_configs_found.add(cached_find_algo_str)
+                
+                # If we reach here, this line is valid - extract results
+                adapt_hparams = {k: v for k, v in hparams_results.items() 
+                               if k in adapt_hparams_keys}
+                mean_acc = hparams_results['hp_acc']
 
-                    # Save the best hparams and acc
-                    if mean_acc > best_acc:
-                        best_acc = mean_acc
-                        best_hparams = copy.deepcopy(adapt_hparams)
-
-            print("Reusing best hp from {}".format(track_path))
+                # Save the best hparams and acc
+                if mean_acc > best_acc:
+                    best_acc = mean_acc
+                    best_hparams = copy.deepcopy(adapt_hparams)
+        
+        # VALIDATION STEP 3: Check cache completeness
+        # Cache is only valid if it contains results for ALL current configs
+        if cache_valid:
+            missing_configs = current_find_algos - cached_configs_found
+            if missing_configs:
+                print(f"[CACHE INVALID] Missing results for {len(missing_configs)} configs:")
+                for cfg in sorted(missing_configs):
+                    print(f"  - {cfg}")
+                cache_valid = False
+        
+        if cache_valid and best_hparams:
+            print(f"[CACHE HIT] Successfully validated {cache_line_count} lines")
+            print(f"[CACHE HIT] All {len(current_find_algos)} configs found in cache")
+            print(f"[CACHE HIT] Best accuracy: {best_acc:.4f}")
+            print(f"[CACHE HIT] Best config: {best_hparams.get('find_algo', 'N/A')}")
             return best_hparams, best_acc
+        else:
+            print(f"[CACHE INVALID] Discarding cache file and recomputing from scratch")
+            # Delete invalid cache to prevent future confusion
+            try:
+                os.remove(track_path)
+                print(f"[CACHE] Deleted invalid file: {os.path.basename(track_path)}")
+            except Exception as e:
+                print(f"[CACHE] Warning: Could not delete cache file: {e}")
+            # Reset and fall through to recomputation
+            best_acc = -1
+            best_hparams = {}
 
-        assert len(evals_list) > 0
-        assert len(hparams_list) > 0
+    # ========================================================================
+    # Compute HP selection from scratch
+    # ========================================================================
+    assert len(evals_list) > 0, "evals_list cannot be empty for HP selection"
+    assert len(hparams_list) > 0, "hparams_list cannot be empty for HP selection"
+    
+    print(f"[HP SEARCH] Starting HP search with {len(hparams_list)} configurations")
+    print(f"[HP SEARCH] Evaluating on {len(evals_list)} validation split(s):")
+    for eval_name, _, _ in evals_list:
+        print(f"  - {eval_name}")
 
-        for adapt_hparams in tqdm(hparams_list, desc='get_best_hp', disable=PRODN):
-            adapt_hparams['cached_loader'] = use_featurer_cache
-            adapted_algorithm = adapt_algorithm_class(dataset.input_shape, dataset.num_classes,
-                len(dataset) - len(args.test_envs), adapt_hparams, algorithm
-            )
-            # adapted_algorithm = DataParallelPassthrough(adapted_algorithm)
-            adapted_algorithm.to(device)
+    for config_idx, adapt_hparams in enumerate(tqdm(hparams_list, desc='get_best_hp', disable=PRODN)):
+        # CRITICAL: Reset random seeds before each config evaluation
+        # This ensures each config starts from the same random state,
+        # preventing non-determinism from cascading across configs
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(args.seed)
+            torch.cuda.manual_seed_all(args.seed)
+        
+        adapt_hparams['cached_loader'] = use_featurer_cache
+        adapted_algorithm = adapt_algorithm_class(dataset.input_shape, dataset.num_classes,
+            len(dataset) - len(args.test_envs), adapt_hparams, algorithm
+        )
+        # adapted_algorithm = DataParallelPassthrough(adapted_algorithm)
+        adapted_algorithm.to(device)
 
-            hparams_results = {}
-            hparams_results.update(adapt_hparams)
+        hparams_results = {}
+        hparams_results.update(adapt_hparams)
 
-            score = []
-            for name, loader, weights in evals_list:
-                print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-                acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
-                score.append(acc)
-                hparams_results[name+'_acc'] = acc
-                adapted_algorithm.reset()
-            mean_acc = np.mean(score)
-            hparams_results['hp_acc'] = mean_acc
-            adapt_hparams['hp_acc']  = mean_acc
-            del adapt_hparams['cached_loader']
-            if 'src_info_dict' in hparams_results.keys():
-                del hparams_results['src_info_dict']
-            
-            # print(adapt_hparams, score, mean_acc)
-            if mean_acc > best_acc:
-                best_acc = mean_acc
-                best_hparams = copy.deepcopy(adapt_hparams)
-            with open(track_path, 'a') as f:
-                f.write(json.dumps(hparams_results, sort_keys=True) + "\n")
-        return best_hparams, best_acc
+        score = []
+        for name, loader, weights in evals_list:
+            print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
+            acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
+            score.append(acc)
+            hparams_results[name+'_acc'] = acc
+            adapted_algorithm.reset()
+        
+        mean_acc = np.mean(score)
+        hparams_results['hp_acc'] = mean_acc
+        adapt_hparams['hp_acc']  = mean_acc
+        del adapt_hparams['cached_loader']
+        if 'src_info_dict' in hparams_results.keys():
+            del hparams_results['src_info_dict']
+        
+        # Track best configuration
+        if mean_acc > best_acc:
+            best_acc = mean_acc
+            best_hparams = copy.deepcopy(adapt_hparams)
+            config_name = adapt_hparams.get('find_algo', 'N/A')
+            if isinstance(config_name, list):
+                config_name = config_name[0] if config_name else 'N/A'
+            print(f"[HP SEARCH] New best: {mean_acc:.4f} with config: {config_name}")
+        
+        # Write to cache file (append mode)
+        with open(track_path, 'a') as f:
+            f.write(json.dumps(hparams_results, sort_keys=True) + "\n")
+    
+    print(f"[HP SEARCH] Completed HP search")
+    print(f"[HP SEARCH] Final best accuracy: {best_acc:.4f}")
+    print(f"[HP SEARCH] Final best config: {best_hparams.get('find_algo', 'N/A')}")
+    
+    return best_hparams, best_acc
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Domain generalization')
@@ -579,6 +794,8 @@ if __name__ == "__main__":
     parser.add_argument('--ckpt_freq', type=int, default=10000)
     parser.add_argument('--adapt_hparams_dict', type=str, default="{}",
         help='JSON-serialized adaptation hparams dict')
+    parser.add_argument('--oracle_exp_id', type=str, default=None,
+        help='Experiment identifier for parallel oracle runs to prevent file collisions')
     args_in = parser.parse_args()
 
     epochs_path = os.path.join(args_in.input_dir, 'results.jsonl')
@@ -622,10 +839,47 @@ if __name__ == "__main__":
         loc_dict = {}
     else:
         use_featurer_cache = False
-        loc_alg_name = args.find_algo + args.fix_algo + args.granularity
+        # ==================================================================
+        # CRITICAL BUG FIX #7: Always use base name for consistency
+        # ==================================================================
+        # ORIGINAL: Single configs used full config string, oracle used base
+        # FIXED: Always extract base name regardless of oracle/manual mode
+        # This ensures consistent file naming and cache file reuse logic
+        # Works correctly for both single-config and multi-config oracle
+        # ==================================================================
+        base_name = get_base_method_name(args.find_algo)
+        
+        # ==================================================================
+        # BUG FIX #9: Add oracle_exp_id to loc_alg_name if provided
+        # ==================================================================
+        # Allows parallel execution of multiple oracle experiments by
+        # differentiating their filenames through unique experiment IDs
+        # ==================================================================
+        if hasattr(args_in, 'oracle_exp_id') and args_in.oracle_exp_id:
+            loc_alg_name = f"{base_name}_{args_in.oracle_exp_id}{args.fix_algo}{args.granularity}"
+        else:
+            loc_alg_name = base_name + args.fix_algo + args.granularity
+        
+        print(f"[CONFIG] find_algo input: {args.find_algo}")
+        print(f"[CONFIG] Extracted base name: {base_name}")
+        if hasattr(args_in, 'oracle_exp_id') and args_in.oracle_exp_id:
+            print(f"[CONFIG] oracle_exp_id: {args_in.oracle_exp_id}")
+        print(f"[CONFIG] Final loc_alg_name: {loc_alg_name}")
+        
+        # Parse comma-separated find_algos for oracle selection
+        if ',' in args.find_algo:
+            # Multiple configs: split and test all
+            find_algo_list = [s.strip() for s in args.find_algo.split(',')]
+            print(f"[CONFIG] Oracle mode detected: {len(find_algo_list)} configs to test")
+            for i, cfg in enumerate(find_algo_list):
+                print(f"  Config {i+1}: {cfg}")
+        else:
+            # Single config
+            find_algo_list = [args.find_algo]
+            print(f"[CONFIG] Single config mode: {args.find_algo}")
+
         loc_dict = {
-            'find_algo': [args.find_algo],
-            # 'fix_algo': [args.fix_algo],
+            'find_algo': find_algo_list,  # Can be multiple values for oracle
             'granularity': [args.granularity],
             'track_tta': [args.track_tta],
         }
@@ -648,6 +902,7 @@ if __name__ == "__main__":
         
     if os.path.exists(os.path.join(args.output_dir, 'done_{}_{}_{}'.format(alg_name, loc_alg_name, args.best_hp.lower()))):
         print("{} with {} with best_hp:{} has already executed".format(alg_name, loc_alg_name, args.best_hp.lower()))
+        sys.exit(0)
 
     # If we ever want to implement checkpointing, just persist these values
     # every once in a while, and then load them from disk here.
@@ -699,6 +954,10 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    
+    # Additional determinism: force all PyTorch operations to be deterministic
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
     if torch.cuda.is_available():
         device = "cuda"
@@ -822,19 +1081,6 @@ if __name__ == "__main__":
     if algorithm_dict is not None:
         algorithm.load_state_dict(algorithm_dict)
 
-    # Evaluate base model
-    # print("Base model's results")
-    # results = {}
-    # evals = zip(eval_loader_names, eval_loaders, eval_weights)
-    # for name, loader, weights in evals:
-    #     print('evaluating with adapt=None on {}...'.format(name))
-    #     acc, ent = accuracy_ent(algorithm, loader, weights, device, adapt=None)
-    #     results[name+'_acc'] = acc
-    #     results[name+'_ent'] = ent
-    # results_keys = sorted(results.keys())
-    # misc.print_row(results_keys, colwidth=12)
-    # misc.print_row([results[key] for key in results_keys], colwidth=12)
-
     print("\nAfter {} with {}".format(alg_name, loc_alg_name))
     # Cache the inference results
     if use_featurer_cache:
@@ -909,18 +1155,25 @@ if __name__ == "__main__":
     adapt_hparams_dict.update(loc_dict)
     product = [x for x in itertools.product(*adapt_hparams_dict.values())]
     adapt_hparams_list = [dict(zip(adapt_hparams_dict.keys(), r)) for r in product]
+    
+    print(f"\n[HPARAMS] Generated {len(adapt_hparams_list)} hyperparameter configurations")
 
     # Perform Model selection (for reducing computation overload and wandb logging)
     if args.best_hp.lower() in ['first']:
         adapt_hparams_list[0]['hp_mode'] = "First"
         adapt_hparams_list = [adapt_hparams_list[0]]
+        print(f"[HP MODE] Using FIRST configuration only")
     elif args.best_hp.lower() in ['last']:
         adapt_hparams_list[-1]['hp_mode'] = "Last"
         adapt_hparams_list = [adapt_hparams_list[-1]]
+        print(f"[HP MODE] Using LAST configuration only")
     #TODO: implement leave-one-out model selection
     #TODO: Remove the second condition below
     if args.best_hp.lower() in ['true', 'iid', 'orc', 'man'] and 'domaingen' not in args.find_algo.lower():
-        print("Get best HParams:")
+        print("="*80)
+        print(f"ORACLE/IID HP SELECTION MODE: {args.best_hp.upper()}")
+        print("="*80)
+        
         tmp_run = wandb.init(mode="disabled") # to avoid timeout waiting error
         train_out_evals, test_out_evals = [], []
         for name, loader, weights in evals:
@@ -928,34 +1181,55 @@ if __name__ == "__main__":
                 test_out_evals.append((name, loader, weights))
             elif 'out' in name:
                 train_out_evals.append((name, loader, weights))
+        
         iid_evals = train_out_evals     # IID Accuracy model selection
         oracle_evals = test_out_evals   # Oracle model selection
         manual_evals = [train_loader]   # Manually chosen best HP on target domain
         
+        print(f"\n[HP SELECTION] Validation splits:")
+        print(f"  IID (source out_split): {len(iid_evals)} environments")
+        print(f"  Oracle (target out_split): {len(oracle_evals)} environments")
+        print(f"  Manual (target in_split): {len(manual_evals)} environments")
+        
         new_adapt_hparams_list = []
-        print("Best Acc on each split:")
+        print("\n[HP SELECTION] Computing best hyperparameters on each split:")
+        
         if args.best_hp.lower() in ['true', 'iid']:
+            print(f"\n--- IID HP Selection ---")
             iid_hparams, iid_acc = get_best_hp(iid_evals, adapt_hparams_list, "Iid")
-            print("\tIID: {:.2f}".format(iid_acc))
+            print(f"[IID] Best accuracy: {iid_acc:.4f}")
+            print(f"[IID] Best config: {iid_hparams.get('find_algo', 'N/A')}")
             iid_hparams['hp_mode'] = "Iid"
             new_adapt_hparams_list.append(iid_hparams)
 
         if args.best_hp.lower() in ['true', 'orc']:
+            print(f"\n--- Oracle HP Selection ---")
             oracle_hparams, oracle_acc = get_best_hp(oracle_evals, adapt_hparams_list, "Orc")
-            print("\tOrc: {:.2f}".format(oracle_acc))
+            print(f"[Oracle] Best accuracy: {oracle_acc:.4f}")
+            print(f"[Oracle] Best config: {oracle_hparams.get('find_algo', 'N/A')}")
             oracle_hparams['hp_mode'] = "Orc"
             new_adapt_hparams_list.append(oracle_hparams)
         
         if args.best_hp.lower() in ['true', 'man']:
+            print(f"\n--- Manual HP Selection ---")
             manual_hparams, manual_acc = get_best_hp(manual_evals, adapt_hparams_list, "Man")
-            print("\tMan: {:.2f}".format(manual_acc))
+            print(f"[Manual] Best accuracy: {manual_acc:.4f}")
+            print(f"[Manual] Best config: {manual_hparams.get('find_algo', 'N/A')}")
             manual_hparams['hp_mode'] = "Man"
             new_adapt_hparams_list.append(manual_hparams)
 
         adapt_hparams_list = new_adapt_hparams_list
+        print(f"\n[HP SELECTION] Final list contains {len(adapt_hparams_list)} configuration(s)")
 
         tmp_run.finish()
 
+    # ========================================================================
+    # Main evaluation loop - test selected HP configurations
+    # ========================================================================
+    print("\n" + "="*80)
+    print("FINAL EVALUATION ON TEST SPLIT")
+    print("="*80)
+    
     for hp_idx, adapt_hparams in tqdm(enumerate(adapt_hparams_list), desc="adapt_hparams", total=len(adapt_hparams_list), disable=PRODN):
         if 'hp_mode' in adapt_hparams.keys():
             hp_str = "hp" + adapt_hparams['hp_mode']
@@ -971,6 +1245,10 @@ if __name__ == "__main__":
             wandb_name = None
         else:
             wandb_name = args.wandb_name + order_str + '_' +  alg_name + "_" + loc_alg_name + "_" + hp_str
+        
+        print(f"\n[EVAL] Configuration {hp_idx+1}/{len(adapt_hparams_list)}: {hp_str}")
+        print(f"[EVAL] find_algo: {adapt_hparams.get('find_algo', 'N/A')}")
+        
         wandb_run = wandb.init(project="stta",
                                 entity="amazing-ml",
                                 name=wandb_name,
@@ -1009,26 +1287,7 @@ if __name__ == "__main__":
         if args.track_tta.lower() != 'true':
             name, loader, weights = train_loader
             print_dbg('evaluating with adapt=True on {}...'.format(name), not PRODN)
-            # Clear the GPU cache
-            # torch.cuda.empty_cache()
-            # Reset the peak memory statistics
-            # torch.cuda.reset_max_memory_allocated(device)
-
-            # start_time = time.time()
             acc, ent = accuracy_ent(adapted_algorithm, loader, weights, device, adapt=True)
-            #TODO: temporary fix to get noise values, remove this
-            # acc, ent, p_noise_list, fp_noise_list = accuracy_ent_noise(adapted_algorithm, loader, weights, device, adapt=True)
-            # adapt_time = time.time() - start_time
-            # Measure the peak memory usage
-            # peak_memory = torch.cuda.max_memory_allocated(device) / (1024 ** 3) # Convert to GB
-
-            # results[name+'_time'] = adapt_time
-            # results[name+'_peak_memory'] = peak_memory
-
-            # results[name+'_pnoise'] = np.mean(p_noise_list)
-            # results[name+'_fpnoise'] = np.mean(fp_noise_list)
-            # noise_df = pd.DataFrame({'p_noise': p_noise_list, 'fp_noise': fp_noise_list})
-            # noise_df.to_csv(os.path.join(args.output_dir, 'noise_{}_{}.csv'.format(alg_name, loc_alg_name)), index=False)
         else:
             oodtr_evals = train_loader
             oodte_evals, iidte_evals = [], []
@@ -1046,14 +1305,6 @@ if __name__ == "__main__":
         results[name+'_ent'] = ent
 
         del adapt_hparams['cached_loader']
-        # if 'src_info_dict' in results.keys():
-        #     del results['src_info_dict']
-        # if 'stats_path' in results.keys():
-        #     del results['stats_path']
-        # if 'grad_mask' in results.keys():
-        #     del results['grad_mask']
-        # if 'mean_grad_mask' in results.keys():
-        #     del results['mean_grad_mask']
 
         wandb.log(results)
         results_keys = sorted(results.keys())
@@ -1068,9 +1319,50 @@ if __name__ == "__main__":
             'hparams': hparams,
             'args': vars(args)    
         })
-        # save file
-        epochs_path = os.path.join(args.output_dir, 'results_{}_{}.jsonl'.format(alg_name, loc_alg_name))
-        with open(epochs_path, 'a') as f:
+        
+        # ====================================================================
+        # BUG FIX #9: Add oracle_exp_id to results JSON
+        # ====================================================================
+        # CRITICAL: Must add oracle_exp_id explicitly for pandas aggregation
+        # oracle_exp_id is in args_in, not in args (which is from train results)
+        # ====================================================================
+        if hasattr(args_in, 'oracle_exp_id') and args_in.oracle_exp_id:
+            results['oracle_exp_id'] = args_in.oracle_exp_id
+        
+        # ====================================================================
+        # CRITICAL BUG FIX #4: Add hp_mode suffix to results filename
+        # ====================================================================
+        # ORIGINAL: All modes wrote to same file (results_ALG_METHOD.jsonl)
+        # FIXED: Oracle/IID modes write to separate files with suffix
+        #   - Oracle: results_PseudoLabel_LEASTDifflrLayer_orc.jsonl
+        #   - IID:    results_PseudoLabel_LEASTDifflrLayer_iid.jsonl
+        #   - Manual: results_PseudoLabel_LEASTDifflrLayer.jsonl
+        # This prevents contamination between HP selection modes
+        # ====================================================================
+        if args.best_hp.lower() in ['orc', 'iid']:
+            hp_suffix = f"_{args.best_hp.lower()}"
+        else:
+            hp_suffix = ""
+        
+        epochs_path = os.path.join(args.output_dir, 
+                                  f'results_{alg_name}_{loc_alg_name}{hp_suffix}.jsonl')
+        
+        # ================================================================
+        # CRITICAL BUG FIX #3: File mode logic
+        # ================================================================
+        # ORIGINAL: if hp_idx == 0 and not os.path.exists(epochs_path)
+        # PROBLEM: If old file exists, uses append mode even for first config!
+        # FIXED: Always overwrite for first config, append for subsequent
+        # ================================================================
+        if hp_idx == 0:
+            mode = 'w'  # Always overwrite for first config (clears old data)
+            print(f"[RESULTS] Creating/overwriting file: {os.path.basename(epochs_path)}")
+        else:
+            mode = 'a'  # Append for subsequent configs
+            print(f"[RESULTS] Appending to file: {os.path.basename(epochs_path)}")
+        
+        # Write results
+        with open(epochs_path, mode) as f:
             f.write(json.dumps(results, sort_keys=True) + "\n")
 
         wandb_run.finish()
@@ -1078,8 +1370,11 @@ if __name__ == "__main__":
             break   # use for faster target evaluation sometimes
 
     # create done file
-    with open(os.path.join(args.output_dir, 'done_{}_{}'.format(alg_name, loc_alg_name)), 'w') as f:
+    with open(os.path.join(args.output_dir, 'done_{}_{}_{}'.format(alg_name, loc_alg_name, args.best_hp.lower())), 'w') as f:
         f.write('done')
+    
+    print(f"\n[COMPLETE] Created done marker: done_{alg_name}_{loc_alg_name}_{args.best_hp.lower()}")
+    print(f"[COMPLETE] Results saved to: results_{alg_name}_{loc_alg_name}{hp_suffix}.jsonl")
 
     # Sleep for 10 seconds to prevent race condition crash
     if not PRODN:
